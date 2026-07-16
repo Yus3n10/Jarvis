@@ -1,6 +1,7 @@
 """Decides what to say right now. Pure — `now` is always a parameter."""
 
 import dataclasses
+from dataclasses import dataclass
 from datetime import datetime
 
 from jarvis.domain import Announcement, Event
@@ -40,3 +41,49 @@ def is_due(
     if ann.last_spoken_utc is None:
         return True
     return now - ann.last_spoken_utc >= repeat_interval(event.start_utc - now)
+
+
+@dataclass(frozen=True)
+class Utterance:
+    event_id: str
+    text: str
+    announcement: Announcement
+
+
+def _phrase(event: Event, ann: Announcement) -> str:
+    if ann.rung_minutes == 1:
+        when = "in 1 minute"
+    else:
+        when = f"in {ann.rung_minutes} minutes"
+    return f"{event.title} {when}."
+
+
+def utterances_due(
+    now: datetime,
+    events: list[Event],
+    announcements: list[Announcement],
+    max_attempts: int | None,
+) -> list[Utterance]:
+    """What Jarvis should say at `now` — at most one utterance per event.
+
+    Several rungs for the same event can come due together. Saying the same
+    thing three times in a row is worse than saying it once, so the most urgent
+    rung wins.
+    """
+    by_id = {e.id: e for e in events}
+    winners: dict[str, Announcement] = {}
+
+    for ann in announcements:
+        event = by_id.get(ann.event_id)
+        if event is None:
+            continue  # event vanished from the calendar mid-flight
+        if not is_due(now, ann, event, max_attempts):
+            continue
+        current = winners.get(ann.event_id)
+        if current is None or ann.rung_minutes < current.rung_minutes:
+            winners[ann.event_id] = ann
+
+    return [
+        Utterance(event_id=eid, text=_phrase(by_id[eid], ann), announcement=ann)
+        for eid, ann in winners.items()
+    ]
