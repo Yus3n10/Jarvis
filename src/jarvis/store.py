@@ -43,6 +43,10 @@ def _parse(raw: str | None) -> datetime | None:
     return None if raw is None else datetime.fromisoformat(raw).astimezone(UTC)
 
 
+def _parse_reminders(raw: str) -> tuple[int, ...]:
+    return tuple(int(m) for m in raw.split(",") if m)
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -54,19 +58,25 @@ class Store:
         self._conn.close()
 
     def upsert_events(self, events: list[Event]) -> None:
-        """Store events and plan announcements for any that are new or moved.
+        """Store events and plan announcements for any that are new or changed.
 
         An unchanged event keeps its existing announcements untouched, so
-        acknowledgement state survives every poll. A moved event is replanned
-        from scratch, because a 7am warning for an 8am meeting is wrong once the
-        meeting becomes 10am.
+        acknowledgement state survives every poll. An event whose start time,
+        declined status, or reminder set has changed is replanned from scratch,
+        because a 7am warning for an 8am meeting is wrong once the meeting
+        becomes 10am, and a reminder the user turned off should stop firing.
         """
         for event in events:
             row = self._conn.execute(
-                "SELECT start_utc, declined FROM events WHERE id = ?", (event.id,)
+                "SELECT start_utc, declined, reminder_minutes FROM events WHERE id = ?",
+                (event.id,),
             ).fetchone()
             moved = row is not None and _parse(row["start_utc"]) != event.start_utc
             declined_changed = row is not None and bool(row["declined"]) != event.declined
+            reminders_changed = (
+                row is not None
+                and _parse_reminders(row["reminder_minutes"]) != event.reminder_minutes
+            )
 
             self._conn.execute(
                 """INSERT INTO events (id, title, start_utc, end_utc, declined, reminder_minutes)
@@ -85,7 +95,7 @@ class Store:
                 ),
             )
 
-            if row is None or moved or declined_changed:
+            if row is None or moved or declined_changed or reminders_changed:
                 self._conn.execute(
                     "DELETE FROM announcements WHERE event_id = ?", (event.id,)
                 )

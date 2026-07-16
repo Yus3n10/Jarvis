@@ -79,3 +79,32 @@ def test_heartbeat_roundtrip(store):
     assert store.last_heartbeat() is None
     store.heartbeat(START)
     assert store.last_heartbeat() == START
+
+
+def test_changing_reminders_replans_announcements(store):
+    store.upsert_events([_event(reminder_minutes=(60, 10))])
+    store.upsert_events([_event(reminder_minutes=(60, 90))])
+    anns = store.all_announcements()
+    assert sorted(a.rung_minutes for a in anns) == [60, 90]
+    assert all(a.state == "pending" for a in anns)
+    assert {a.due_utc for a in anns} == {
+        START - timedelta(minutes=60),
+        START - timedelta(minutes=90),
+    }
+
+
+def test_changing_reminders_discards_stale_ack_state(store):
+    store.upsert_events([_event(reminder_minutes=(60, 10))])
+    store.ack("evt1")
+    store.upsert_events([_event(reminder_minutes=(60, 90))])
+    anns = store.all_announcements()
+    assert sorted(a.rung_minutes for a in anns) == [60, 90]
+    assert all(a.state == "pending" for a in anns)
+
+
+def test_mark_state_sets_state(store):
+    store.upsert_events([_event()])
+    ann = next(a for a in store.all_announcements() if a.rung_minutes == 60)
+    store.mark_state(ann, "failed")
+    got = next(a for a in store.all_announcements() if a.rung_minutes == 60)
+    assert got.state == "failed"
