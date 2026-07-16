@@ -57,3 +57,17 @@ def test_text_names_the_event_and_the_lead_time():
     out = utterances_due(now, [_event()], [_ann(60)], None)
     assert "Job interview" in out[0].text
     assert "60 minutes" in out[0].text
+
+
+def test_collapse_is_order_independent():
+    """Most urgent rung wins regardless of announcement order.
+
+    Regression test: catches if `ann.rung_minutes < current.rung_minutes`
+    comparison is removed from utterances_due, leaving "last wins" behavior.
+    Here the most urgent (rung 5) is first, not last.
+    """
+    now = START - timedelta(minutes=4)
+    anns = [_ann(5), _ann(60), _ann(20)]  # most urgent is first
+    out = utterances_due(now, [_event()], anns, None)
+    assert len(out) == 1
+    assert out[0].announcement.rung_minutes == 5
