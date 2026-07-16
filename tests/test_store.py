@@ -108,3 +108,19 @@ def test_mark_state_sets_state(store):
     store.mark_state(ann, "failed")
     got = next(a for a in store.all_announcements() if a.rung_minutes == 60)
     assert got.state == "failed"
+
+
+def test_reordered_reminders_do_not_replan(store):
+    """Reordered reminders should not trigger replan; ack state must survive."""
+    store.upsert_events([_event(reminder_minutes=(60, 10))])
+    store.ack("evt1")
+    store.upsert_events([_event(reminder_minutes=(10, 60))])
+    assert {a.state for a in store.all_announcements()} == {"acked"}
+
+
+def test_duplicate_reminders_do_not_replan(store):
+    """Duplicate reminders should not trigger replan; ack state must survive."""
+    store.upsert_events([_event(reminder_minutes=(60, 10))])
+    store.ack("evt1")
+    store.upsert_events([_event(reminder_minutes=(60, 60, 10))])
+    assert {a.state for a in store.all_announcements()} == {"acked"}

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jarvis.domain import Announcement, Event
-from jarvis.ladder import plan_announcements
+from jarvis.ladder import plan_announcements, rungs_for
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -68,15 +68,23 @@ class Store:
         """
         for event in events:
             row = self._conn.execute(
-                "SELECT start_utc, declined, reminder_minutes FROM events WHERE id = ?",
+                "SELECT start_utc, end_utc, declined, reminder_minutes FROM events WHERE id = ?",
                 (event.id,),
             ).fetchone()
             moved = row is not None and _parse(row["start_utc"]) != event.start_utc
             declined_changed = row is not None and bool(row["declined"]) != event.declined
-            reminders_changed = (
-                row is not None
-                and _parse_reminders(row["reminder_minutes"]) != event.reminder_minutes
-            )
+            if row is not None:
+                stored_event = Event(
+                    id=event.id,
+                    title=event.title,
+                    start_utc=_parse(row["start_utc"]),
+                    end_utc=_parse(row["end_utc"]),
+                    declined=bool(row["declined"]),
+                    reminder_minutes=_parse_reminders(row["reminder_minutes"]),
+                )
+                reminders_changed = rungs_for(stored_event) != rungs_for(event)
+            else:
+                reminders_changed = False
 
             self._conn.execute(
                 """INSERT INTO events (id, title, start_utc, end_utc, declined, reminder_minutes)
@@ -116,9 +124,7 @@ class Store:
                 start_utc=_parse(r["start_utc"]),
                 end_utc=_parse(r["end_utc"]),
                 declined=bool(r["declined"]),
-                reminder_minutes=tuple(
-                    int(m) for m in r["reminder_minutes"].split(",") if m
-                ),
+                reminder_minutes=_parse_reminders(r["reminder_minutes"]),
             )
             for r in rows
         ]
