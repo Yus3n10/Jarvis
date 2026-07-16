@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 
-from jarvis.api import tick
+from jarvis.api import create_app, tick
 from jarvis.config import Config
 from jarvis.domain import Event
 from jarvis.store import Store
@@ -98,3 +99,115 @@ def test_default_config_never_gives_up(store):
     for i in range(20):
         tick(now + timedelta(minutes=10 * i), store, NullVoice(), Config())
     assert store.all_announcements()[0].state == "pending"
+
+
+# --- create_app / routes / websocket ---------------------------------------
+
+
+def test_state_returns_seeded_event(store):
+    client = TestClient(create_app(store, Config()))
+    resp = client.get("/api/state")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["events"]) == 1
+    evt = data["events"][0]
+    assert evt["title"] == "Job interview"
+    # Must be an ISO-8601 UTC string, not PHT-shifted -- display layer's job.
+    assert evt["start_utc"] == START.isoformat()
+    assert evt["start_utc"].endswith("+00:00")
+
+
+def test_needs_ack_flips_after_speaking(store):
+    client = TestClient(create_app(store, Config()))
+    now = START - timedelta(minutes=60)
+
+    before = client.get("/api/state").json()["events"][0]
+    assert before["needs_ack"] is False
+
+    tick(now, store, NullVoice(), Config())
+
+    after = client.get("/api/state").json()["events"][0]
+    assert after["needs_ack"] is True
+
+
+def test_ack_endpoint_silences_event(store):
+    now = START - timedelta(minutes=60)
+    tick(now, store, NullVoice(), Config())
+
+    client = TestClient(create_app(store, Config()))
+    resp = client.post("/api/ack/evt1")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    evt = client.get("/api/state").json()["events"][0]
+    assert evt["needs_ack"] is False
+
+    assert tick(now + timedelta(minutes=30), store, NullVoice(), Config()) == []
+
+
+def test_snooze_endpoint_sets_snoozed_until_and_silences_tick(store):
+    client = TestClient(create_app(store, Config()))
+
+    # A huge window, so snoozed_until_utc lands well after the fixture's
+    # simulated `now` regardless of the real wall-clock date the suite runs on.
+    resp = client.post("/api/snooze/evt1", params={"minutes": 100_000_000})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    anns = store.all_announcements()
+    assert any(a.snoozed_until_utc is not None for a in anns)
+
+    now = START - timedelta(minutes=60)
+    assert tick(now, store, NullVoice(), Config()) == []
+
+
+def test_state_stale_reflects_heartbeat(store):
+    client = TestClient(create_app(store, Config()))
+
+    data = client.get("/api/state").json()
+    assert data["heartbeat_utc"] is None
+    assert data["stale"] is True
+
+    tick(datetime.now(UTC), store, NullVoice(), Config())
+
+    data = client.get("/api/state").json()
+    assert data["stale"] is False
+
+
+def test_declined_events_excluded_from_state(store):
+    store.upsert_events([
+        Event(
+            id="evt2",
+            title="Declined meeting",
+            start_utc=START + timedelta(hours=2),
+            end_utc=START + timedelta(hours=3),
+            declined=True,
+            reminder_minutes=(60,),
+        )
+    ])
+    client = TestClient(create_app(store, Config()))
+    data = client.get("/api/state").json()
+    ids = [e["id"] for e in data["events"]]
+    assert "evt1" in ids
+    assert "evt2" not in ids
+
+
+def test_ws_sends_a_state_payload(store):
+    client = TestClient(create_app(store, Config()))
+    rest_state = client.get("/api/state").json()
+
+    with client.websocket_connect("/ws") as ws:
+        payload = ws.receive_json()
+
+    assert set(payload.keys()) == set(rest_state.keys())
+    assert payload["events"][0]["id"] == "evt1"
+
+
+def test_ws_disconnect_is_handled_cleanly(store):
+    """Closing the socket mid-loop must not raise or leak an unhandled error."""
+    client = TestClient(create_app(store, Config()))
+
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        # Falling out of the `with` block closes the connection; if the
+        # server-side handler doesn't exit cleanly, TestClient re-raises here.
