@@ -44,14 +44,14 @@ class Voice:
                 timeout=30,
             )
             if piper.returncode != 0:
-                log.error("piper failed: %s", piper.stderr.decode("utf-8", "replace"))
+                log.error("piper %s failed: %s", self._piper, piper.stderr.decode("utf-8", "replace"))
                 return False
 
             played = subprocess.run(
                 self._player, input=piper.stdout, capture_output=True, timeout=60
             )
             if played.returncode != 0:
-                log.error("playback failed: %s", played.stderr.decode("utf-8", "replace"))
+                log.error("playback %s failed: %s", " ".join(self._player), played.stderr.decode("utf-8", "replace"))
                 return False
             return True
         except (OSError, subprocess.SubprocessError) as exc:
