@@ -4,6 +4,7 @@ Everything downstream reads from SQLite, so a failure here degrades Jarvis to
 "working from cache" rather than "broken".
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,20 +17,31 @@ from jarvis.domain import Event
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+log = logging.getLogger(__name__)
+
 
 def parse_event(raw: dict) -> Event | None:
     """Convert one Google Calendar API event into an Event.
 
-    Returns None for events Jarvis should ignore entirely: all-day events (no
-    dateTime, so no lead time means anything) and cancelled events.
+    Returns None for events Jarvis should ignore entirely, or cannot make
+    sense of: all-day events (no dateTime, so no lead time means anything),
+    cancelled events, events with no usable end time, and events with no id
+    (nothing to key them by). This function is pure and must stay that way -
+    no network, no clock, no I/O, no logging.
     """
     if raw.get("status") == "cancelled":
         return None
+
+    event_id = raw.get("id")
+    if event_id is None:
+        return None  # can't track an event we can't key
 
     start = raw.get("start", {})
     end = raw.get("end", {})
     if "dateTime" not in start:
         return None  # all-day event
+    if "dateTime" not in end:
+        return None  # malformed/all-day end; nothing usable to parse
 
     declined = any(
         a.get("self") and a.get("responseStatus") == "declined"
@@ -37,10 +49,10 @@ def parse_event(raw: dict) -> Event | None:
     )
 
     overrides = raw.get("reminders", {}).get("overrides", [])
-    reminder_minutes = tuple(o["minutes"] for o in overrides)
+    reminder_minutes = tuple(o["minutes"] for o in overrides if "minutes" in o)
 
     return Event(
-        id=raw["id"],
+        id=event_id,
         title=raw.get("summary") or "Untitled event",
         start_utc=datetime.fromisoformat(start["dateTime"]).astimezone(UTC),
         end_utc=datetime.fromisoformat(end["dateTime"]).astimezone(UTC),
@@ -68,8 +80,18 @@ def fetch_events(
         )
         .execute()
     )
-    parsed = (parse_event(raw) for raw in result.get("items", []))
-    return [e for e in parsed if e is not None]
+    events = []
+    for raw in result.get("items", []):
+        try:
+            event = parse_event(raw)
+        except Exception:
+            log.warning(
+                "skipping malformed calendar event id=%s", raw.get("id"), exc_info=True
+            )
+            continue
+        if event is not None:
+            events.append(event)
+    return events
 
 
 def build_service(credentials_path: Path, token_path: Path):

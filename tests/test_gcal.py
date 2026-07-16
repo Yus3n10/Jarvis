@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from jarvis.gcal import parse_event
+from jarvis.gcal import fetch_events, parse_event
 
 
 def _raw(**kw):
@@ -72,3 +72,65 @@ def test_missing_summary_gets_placeholder():
 
 def test_cancelled_event_is_skipped():
     assert parse_event(_raw(status="cancelled")) is None
+
+
+def test_end_date_only_is_skipped():
+    """start has dateTime but end is date-only (all-day-ish end): unusable, skip."""
+    raw = _raw(end={"date": "2026-07-21"})
+    assert parse_event(raw) is None
+
+
+def test_missing_end_key_is_skipped():
+    """Some third-party/imported events have no end block at all."""
+    raw = _raw()
+    del raw["end"]
+    assert parse_event(raw) is None
+
+
+def test_override_missing_minutes_is_ignored():
+    raw = _raw(reminders={"useDefault": False, "overrides": [
+        {"method": "popup"},
+        {"method": "popup", "minutes": 60},
+    ]})
+    assert parse_event(raw).reminder_minutes == (60,)
+
+
+def test_event_with_no_id_is_skipped():
+    raw = _raw()
+    del raw["id"]
+    assert parse_event(raw) is None
+
+
+class _FakeEventsResource:
+    def __init__(self, response):
+        self._response = response
+
+    def list(self, **kwargs):
+        return self
+
+    def execute(self):
+        return self._response
+
+
+class _FakeService:
+    def __init__(self, response):
+        self._resource = _FakeEventsResource(response)
+
+    def events(self):
+        return self._resource
+
+
+def test_fetch_events_skips_malformed_item_keeps_good_one():
+    """One event that blows up inside parse_event must not sink the batch.
+
+    An unparseable dateTime string passes the "dateTime" presence checks but
+    raises inside datetime.fromisoformat, so this exercises fetch_events'
+    per-item try/except rather than parse_event's None-returning guards.
+    """
+    good = _raw(id="good-evt")
+    malformed = _raw(id="bad-evt", start={"dateTime": "not-a-real-datetime"})
+    service = _FakeService({"items": [good, malformed]})
+
+    events = fetch_events(service, "primary", datetime(2026, 7, 20, tzinfo=UTC))
+
+    assert [e.id for e in events] == ["good-evt"]
