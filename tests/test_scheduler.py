@@ -115,3 +115,47 @@ def test_exhausted_announcement_is_not_due():
 
 def test_config_defaults_to_infinite_attempts():
     assert Config().max_attempts is None
+
+
+def test_config_load_missing_file_returns_defaults(tmp_path):
+    """Missing file means all defaults are used."""
+    config_path = tmp_path / "nonexistent.toml"
+    config = Config.load(config_path)
+    assert config.max_attempts is None
+    assert config.poll_seconds == 300
+    assert config.calendar_id == "primary"
+
+
+def test_config_load_valid_toml_overrides_all_values(tmp_path):
+    """Valid TOML file overrides all values."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("max_attempts = 10\npoll_seconds = 60\ncalendar_id = 'work'")
+
+    config = Config.load(config_path)
+    assert config.max_attempts == 10
+    assert config.poll_seconds == 60
+    assert config.calendar_id == "work"
+
+
+def test_config_load_partial_toml_mixes_defaults(tmp_path):
+    """TOML with only some keys leaves others at defaults."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("max_attempts = 5\n")
+
+    config = Config.load(config_path)
+    assert config.max_attempts == 5
+    assert config.poll_seconds == 300  # default
+    assert config.calendar_id == "primary"  # default
+
+
+def test_config_load_ignores_unknown_keys(tmp_path):
+    """TOML with unknown keys silently ignores them."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("max_attempts = 7\nunknown_key = 'ignored'\nanother_unknown = 42\npoll_seconds = 120")
+
+    config = Config.load(config_path)
+    assert config.max_attempts == 7
+    assert config.poll_seconds == 120
+    assert config.calendar_id == "primary"  # default
+    assert not hasattr(config, 'unknown_key')
+    assert not hasattr(config, 'another_unknown')
