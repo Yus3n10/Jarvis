@@ -1,7 +1,10 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
+from starlette.routing import WebSocketRoute
 
 from jarvis.api import create_app, tick
 from jarvis.config import Config
@@ -204,10 +207,58 @@ def test_ws_sends_a_state_payload(store):
 
 
 def test_ws_disconnect_is_handled_cleanly(store):
-    """Closing the socket mid-loop must not raise or leak an unhandled error."""
-    client = TestClient(create_app(store, Config()))
+    """The handler must return cleanly when send_json raises WebSocketDisconnect.
 
-    with client.websocket_connect("/ws") as ws:
-        ws.receive_json()
-        # Falling out of the `with` block closes the connection; if the
-        # server-side handler doesn't exit cleanly, TestClient re-raises here.
+    Driven directly against the endpoint coroutine rather than through
+    TestClient: TestClient's WebSocketTestSession.__exit__ closes the
+    connection by cancelling the anyio scope wrapping the app task, which
+    raises inside the handler's `asyncio.sleep(1)` -- not a
+    WebSocketDisconnect, and not what `except WebSocketDisconnect` catches.
+    That cancellation is then silently swallowed by TestClient's own
+    teardown scope, so a test built on it "passes" without ever exercising
+    the handler's except-clause. Calling the registered endpoint directly
+    with a fake socket that raises WebSocketDisconnect from send_json is
+    the only way to pin the actual contract.
+    """
+    app = create_app(store, Config())
+    ws_route = next(
+        route
+        for route in app.routes
+        if isinstance(route, WebSocketRoute) and route.path == "/ws"
+    )
+
+    class FakeSocket:
+        async def accept(self) -> None:
+            pass
+
+        async def send_json(self, payload: dict) -> None:
+            raise WebSocketDisconnect(code=1006)
+
+    # If the handler doesn't catch WebSocketDisconnect, this raises and the
+    # test fails.
+    asyncio.run(ws_route.endpoint(FakeSocket()))
+
+
+def test_state_payload_reports_failed_flag(store):
+    store.upsert_events([
+        Event(
+            id="evt2",
+            title="Untouched meeting",
+            start_utc=START + timedelta(hours=2),
+            end_utc=START + timedelta(hours=3),
+            reminder_minutes=(60,),
+        )
+    ])
+    config = Config(max_attempts=2)
+    now = START - timedelta(minutes=60)
+    tick(now, store, NullVoice(), config)
+    tick(now + timedelta(minutes=10), store, NullVoice(), config)
+    tick(now + timedelta(minutes=20), store, NullVoice(), config)
+    assert store.all_announcements()[0].state == "failed"
+
+    client = TestClient(create_app(store, config))
+    data = client.get("/api/state").json()
+    by_id = {e["id"]: e for e in data["events"]}
+
+    assert by_id["evt1"]["failed"] is True
+    assert by_id["evt2"]["failed"] is False
