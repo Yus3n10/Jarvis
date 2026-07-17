@@ -10,3 +10,4 @@ token.json
 config.toml
 ui/node_modules/
 ui/dist/
+.gemini_env
