@@ -35,7 +35,9 @@ fi
 
 echo "Installing for user '$TARGET_USER' (home: $TARGET_HOME)"
 
-sed -e "s#@USER@#$TARGET_USER#g" -e "s#@HOME@#$TARGET_HOME#g" \
+TARGET_UID=$(id -u "$TARGET_USER")
+
+sed -e "s#@USER@#$TARGET_USER#g" -e "s#@HOME@#$TARGET_HOME#g" -e "s#@UID@#$TARGET_UID#g" \
     "$REPO_DIR/deploy/jarvis.service.in" > /etc/systemd/system/jarvis.service
 echo "  wrote /etc/systemd/system/jarvis.service"
 

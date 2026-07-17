@@ -15,6 +15,12 @@ Environment=PIPER_MODEL=@HOME@/piper/en_US-amy-medium.onnx
 # Quoted: systemd splits Environment= on whitespace, so an unquoted value would
 # set AUDIO_PLAYER=aplay and silently discard the arguments.
 Environment="AUDIO_PLAYER=aplay -q -"
+# Without this, aplay cannot find the user's PipeWire socket
+# ($XDG_RUNTIME_DIR/pipewire-0) and so cannot see Bluetooth or USB sinks at all
+# -- it falls back to bare ALSA and only ever finds HDMI. This is a system
+# service, so it depends on @USER@ being logged in to a graphical session for
+# that socket to exist; on a kiosk Pi with autologin, it does.
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 
 [Install]
 WantedBy=multi-user.target
