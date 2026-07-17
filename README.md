@@ -41,9 +41,66 @@ sleepers — it speaks, and sound does not rouse everyone. See
 Raspberry Pi 5, 7" HDMI touchscreen, USB webcam or headset (v2), any Bluetooth or
 USB speaker. Note the Pi 5 has no 3.5mm jack — all audio is USB, Bluetooth, or HDMI.
 
-## Setup
+## Setup / Deploy
 
-See `docs/google-setup.md`, then `deploy/`.
+A competent stranger with a fresh clone, a Raspberry Pi, and a laptop should
+be able to follow this end to end.
+
+1. **Google Calendar access, on the laptop.** Follow `docs/google-setup.md`
+   in full — it produces `credentials.json` and `token.json`. Do this step on
+   the laptop, not the Pi: the Pi is headless and cannot run the browser
+   OAuth flow. Note its warning that Testing-status refresh tokens expire
+   after 7 days — see "Sync health" below for what that looks like once it
+   happens.
+
+2. **Clone and install on the Pi, editable.**
+
+       git clone <your-repo-url> ~/jarvis && cd ~/jarvis
+       python3 -m venv .venv
+       .venv/bin/pip install -e .
+
+   The `-e` is required, not a nicety. `ROOT` in `src/jarvis/__main__.py` is
+   `Path(__file__).resolve().parents[2]`, which only resolves to the repo
+   root under an editable install. A plain `pip install .` makes
+   `credentials.json`, `token.json`, `config.toml`, `jarvis.db`, and
+   `ui/dist` all resolve to nothing — Jarvis starts cleanly, logs "running
+   from cache", and serves nothing useful. Silently.
+
+3. **Copy the Google credentials from the laptop to the Pi.**
+
+       scp you@laptop:path/to/jarvis/token.json ~/jarvis/
+       scp you@laptop:path/to/jarvis/credentials.json ~/jarvis/
+
+4. **Build the dashboard.** `ui/dist/` is gitignored, and `create_app` only
+   mounts it `if dist.exists()`. Skip this on a fresh clone and the kiosk
+   shows a Chromium error page instead of the touchscreen UI.
+
+       cd ui && npm ci && npm run build
+
+5. **Install the systemd service and kiosk autostart.**
+
+       sudo cp deploy/jarvis.service /etc/systemd/system/
+       sudo systemctl enable --now jarvis
+       mkdir -p ~/.config/autostart && cp deploy/kiosk.desktop ~/.config/autostart/
+
+6. **Verify.**
+
+       systemctl status jarvis          # expect: active (running)
+       journalctl -u jarvis -f          # expect: sync succeeding, no tracebacks
+
+   Then `sudo reboot` and confirm both the service and the kiosk come back on
+   their own. An appliance that needs a human to start it is not an
+   appliance.
+
+### Sync health
+
+The dashboard's `NOT UPDATING` badge reflects two independent signals: the
+scheduler tick loop, and whether the calendar has actually synced recently.
+A tick loop can stay perfectly healthy while sync is permanently dead — the
+7-day Testing-token expiry `docs/google-setup.md` warns about is exactly
+this case — so a stalled or never-succeeded sync now shows `NOT UPDATING`
+even if everything else looks fine, instead of quietly repeating a stale
+cache forever.
 
 ## Configuration
 
