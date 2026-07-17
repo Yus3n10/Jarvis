@@ -188,6 +188,28 @@ class Store:
         ).fetchone()
         return None if row is None else _parse(row["value"])
 
+    def sync_ok(self, at: datetime) -> None:
+        """Record the last time the calendar sync completed successfully.
+
+        Mirrors heartbeat/last_heartbeat exactly, but tracks a different
+        signal: heartbeat means the tick loop is alive, this means the
+        calendar was actually read recently. A tick loop can be perfectly
+        healthy while sync is permanently dead, so the two must be tracked
+        separately.
+        """
+        self._conn.execute(
+            """INSERT INTO meta (key, value) VALUES ('last_sync_ok', ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (_iso(at),),
+        )
+        self._conn.commit()
+
+    def last_sync_ok(self) -> datetime | None:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = 'last_sync_ok'"
+        ).fetchone()
+        return None if row is None else _parse(row["value"])
+
     def prune_absent(self, keep_ids: set[str]) -> int:
         """Delete every event not in keep_ids, and its announcements with it.
 

@@ -81,6 +81,12 @@ def test_heartbeat_roundtrip(store):
     assert store.last_heartbeat() == START
 
 
+def test_sync_ok_roundtrip(store):
+    assert store.last_sync_ok() is None
+    store.sync_ok(START)
+    assert store.last_sync_ok() == START
+
+
 def test_changing_reminders_replans_announcements(store):
     store.upsert_events([_event(reminder_minutes=(60, 10))])
     store.upsert_events([_event(reminder_minutes=(60, 90))])

@@ -183,17 +183,58 @@ def test_snooze_endpoint_sets_snoozed_until_and_silences_tick(store):
     assert tick(now, store, NullVoice(), Config()) == []
 
 
-def test_state_stale_reflects_heartbeat(store):
+def test_state_stale_reflects_heartbeat_and_sync(store):
     client = TestClient(create_app(store, Config()))
 
     data = client.get("/api/state").json()
     assert data["heartbeat_utc"] is None
     assert data["stale"] is True
 
-    tick(datetime.now(UTC), store, NullVoice(), Config())
+    now = datetime.now(UTC)
+    tick(now, store, NullVoice(), Config())
+    store.sync_ok(now)
 
     data = client.get("/api/state").json()
     assert data["stale"] is False
+
+
+def test_never_synced_store_is_stale_even_with_a_fresh_heartbeat(store):
+    """The heart of the fix: a healthy tick loop must not mask a dead sync.
+
+    tick() only writes the heartbeat; it never touches the network. If sync
+    has never once succeeded, the dashboard must say so regardless of how
+    healthy the tick loop looks.
+    """
+    client = TestClient(create_app(store, Config()))
+    tick(datetime.now(UTC), store, NullVoice(), Config())
+
+    data = client.get("/api/state").json()
+    assert data["heartbeat_utc"] is not None
+    assert data["last_sync_ok_utc"] is None
+    assert data["stale"] is True
+
+
+def test_recent_sync_ok_clears_staleness(store):
+    config = Config()
+    now = datetime.now(UTC)
+    tick(now, store, NullVoice(), config)
+    store.sync_ok(now)
+
+    client = TestClient(create_app(store, config))
+    data = client.get("/api/state").json()
+    assert data["stale"] is False
+
+
+def test_sync_ok_older_than_threshold_is_stale_again(store):
+    config = Config()
+    now = datetime.now(UTC)
+    tick(now, store, NullVoice(), config)
+    stale_sync = now - timedelta(seconds=config.poll_seconds * 3 + 1)
+    store.sync_ok(stale_sync)
+
+    client = TestClient(create_app(store, config))
+    data = client.get("/api/state").json()
+    assert data["stale"] is True
 
 
 def test_declined_events_excluded_from_state(store):

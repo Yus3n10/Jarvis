@@ -14,6 +14,13 @@ from jarvis.store import Store
 
 log = logging.getLogger(__name__)
 
+# A single missed poll must stay quiet -- poll_seconds defaults to 300s, so a
+# threshold of a couple of minutes would false-alarm on every ordinary cycle.
+# Threshold is derived from the configured poll interval instead of a fixed
+# number of minutes, so it scales with however often sync is actually meant
+# to run.
+_SYNC_STALE_POLL_MULTIPLIER = 3
+
 
 def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
     """One scheduler pass. Returns the texts actually spoken.
@@ -47,16 +54,23 @@ def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
     return spoken
 
 
-def _state_payload(store: Store, now: datetime) -> dict:
+def _state_payload(store: Store, now: datetime, config: Config) -> dict:
     events = sorted(store.all_events(), key=lambda e: e.start_utc)
     anns = store.all_announcements()
     pending = {a.event_id for a in anns if a.state == "pending"}
     failed = {a.event_id for a in anns if a.state == "failed"}
     heartbeat = store.last_heartbeat()
+    last_sync_ok = store.last_sync_ok()
+    # Never-synced-yet (None) counts as stale: a Jarvis that has never reached
+    # Google has never been trustworthy, regardless of how healthy the tick
+    # loop looks.
+    sync_stale_after = timedelta(seconds=config.poll_seconds * _SYNC_STALE_POLL_MULTIPLIER)
+    sync_stale = last_sync_ok is None or (now - last_sync_ok) > sync_stale_after
     return {
         "now_utc": now.isoformat(),
         "heartbeat_utc": heartbeat.isoformat() if heartbeat else None,
-        "stale": heartbeat is None or (now - heartbeat) > timedelta(minutes=2),
+        "last_sync_ok_utc": last_sync_ok.isoformat() if last_sync_ok else None,
+        "stale": heartbeat is None or (now - heartbeat) > timedelta(minutes=2) or sync_stale,
         "events": [
             {
                 "id": e.id,
@@ -81,7 +95,7 @@ def create_app(store: Store, config: Config) -> FastAPI:
 
     @app.get("/api/state")
     def state() -> dict:
-        return _state_payload(store, datetime.now(UTC))
+        return _state_payload(store, datetime.now(UTC), config)
 
     @app.post("/api/ack/{event_id}")
     def ack(event_id: str) -> dict:
@@ -98,7 +112,7 @@ def create_app(store: Store, config: Config) -> FastAPI:
         await socket.accept()
         try:
             while True:
-                await socket.send_json(_state_payload(store, datetime.now(UTC)))
+                await socket.send_json(_state_payload(store, datetime.now(UTC), config))
                 await asyncio.sleep(1)
         except WebSocketDisconnect:
             pass
