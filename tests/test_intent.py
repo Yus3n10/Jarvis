@@ -3,7 +3,9 @@ import pytest
 from jarvis.intent import (
     Ack,
     DEFAULT_SNOOZE_MINUTES,
+    QueryDate,
     QueryNext,
+    QueryTime,
     QueryToday,
     Snooze,
     Unknown,
@@ -59,6 +61,26 @@ def test_query_today(text):
     assert parse(text) == QueryToday()
 
 
+@pytest.mark.parametrize("text", [
+    "what time is it",
+    "what's the time",
+    "tell me the time",
+    "current time",
+])
+def test_query_time(text):
+    assert parse(text) == QueryTime()
+
+
+@pytest.mark.parametrize("text", [
+    "what day is it",
+    "what's the date",
+    "what date is it today",
+    "today's date",
+])
+def test_query_date(text):
+    assert parse(text) == QueryDate()
+
+
 def test_snooze_outranks_ack():
     # contains both "okay" and "snooze" -> the action wins
     assert parse("okay snooze ten") == Snooze(10)
@@ -66,6 +88,10 @@ def test_snooze_outranks_ack():
 
 def test_today_outranks_next():
     assert parse("what's next today") == QueryToday()
+
+
+def test_time_outranks_today():
+    assert parse("what time is it today") == QueryTime()
 
 
 @pytest.mark.parametrize("text", [

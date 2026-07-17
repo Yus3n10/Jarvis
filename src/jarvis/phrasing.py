@@ -28,6 +28,18 @@ def answer_next(now: datetime, events: list[Event]) -> str:
     return f"Next up: {e.title}, at {_clock(e.start_utc)}."
 
 
+def answer_time(now: datetime) -> str:
+    return f"It's {_clock(now)}."
+
+
+def answer_date(now: datetime) -> str:
+    local = now.astimezone(_PHT)
+    # e.g. "It's Friday, the 17th of July."
+    day = local.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return local.strftime(f"It's %A, the {day}{suffix} of %B.")
+
+
 def answer_today(now: datetime, events: list[Event]) -> str:
     today = now.astimezone(_PHT).date()
     todays = [

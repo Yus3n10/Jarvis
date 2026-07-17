@@ -33,11 +33,21 @@ class QueryToday:
 
 
 @dataclass(frozen=True)
+class QueryTime:
+    pass
+
+
+@dataclass(frozen=True)
+class QueryDate:
+    pass
+
+
+@dataclass(frozen=True)
 class Unknown:
     pass
 
 
-Intent = Ack | Snooze | QueryNext | QueryToday | Unknown
+Intent = Ack | Snooze | QueryNext | QueryToday | QueryTime | QueryDate | Unknown
 
 _NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
@@ -53,6 +63,8 @@ _ACK_WORDS = (
 )
 
 _SNOOZE_WORDS = ("snooze", "remind me later", "later", "give me")
+_TIME_WORDS = ("what time", "the time", "time is it", "current time")
+_DATE_WORDS = ("what day", "what date", "the date", "today's date", "what's the date")
 _TODAY_WORDS = ("today", "rest of my day", "rest of the day", "my day")
 _NEXT_WORDS = ("next", "coming up", "after this", "upcoming")
 
@@ -79,13 +91,19 @@ def _has_any(text: str, needles) -> bool:
 
 def parse(transcript: str) -> Intent:
     """Map a transcript to a command. First match wins, in a deliberate order:
-    snooze > query-today > query-next > ack > unknown."""
+    snooze > time > date > today > next > ack > unknown. Time and date outrank
+    'today' so "what time is it today" and "what's the date today" resolve to the
+    clock/calendar, not the schedule."""
     text = _normalize(transcript)
     if not text:
         return Unknown()
 
     if _has_any(text, _SNOOZE_WORDS):
         return Snooze(_extract_minutes(text))
+    if _has_any(text, _TIME_WORDS):
+        return QueryTime()
+    if _has_any(text, _DATE_WORDS):
+        return QueryDate()
     if _has_any(text, _TODAY_WORDS):
         return QueryToday()
     if _has_any(text, _NEXT_WORDS):

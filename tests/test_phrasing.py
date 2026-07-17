@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from jarvis.domain import Event
-from jarvis.phrasing import answer_next, answer_today
+from jarvis.phrasing import answer_date, answer_next, answer_time, answer_today
 
 # 2026-07-17 08:00 PHT == 2026-07-17 00:00 UTC
 NOW = datetime(2026, 7, 17, 0, 0, tzinfo=UTC)
@@ -48,3 +48,15 @@ def test_today_lists_todays_events_only():
 
 def test_today_empty():
     assert "nothing" in answer_today(NOW, []).lower()
+
+
+def test_time_is_pht():
+    # NOW is 00:00 UTC == 08:00 PHT
+    assert "8:00 AM" in answer_time(NOW)
+
+
+def test_date_names_weekday_and_month():
+    out = answer_date(NOW)  # 2026-07-17 is a Friday
+    assert "Friday" in out
+    assert "July" in out
+    assert "17th" in out
