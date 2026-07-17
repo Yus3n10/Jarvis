@@ -114,7 +114,11 @@ export default function App() {
   if (!state) return <div className="screen loading">Connecting…</div>;
 
   const ack = (id: string) =>
-    fetch(`/api/ack/${encodeURIComponent(id)}`, { method: "POST" });
+    fetch(`/api/ack/${encodeURIComponent(id)}`, { method: "POST" }).catch((err) => {
+      // A failed ack POST would otherwise be invisible until the next state
+      // push overwrites it -- surface it immediately so it isn't silent.
+      console.error("ack request failed", err);
+    });
 
   const today = new Date(state.now_utc).toLocaleDateString("en-PH", {
     timeZone: PHT,
