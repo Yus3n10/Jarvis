@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from jarvis.gcal import fetch_events, parse_event
 
 
@@ -134,3 +136,29 @@ def test_fetch_events_skips_malformed_item_keeps_good_one():
     events = fetch_events(service, "primary", datetime(2026, 7, 20, tzinfo=UTC))
 
     assert [e.id for e in events] == ["good-evt"]
+
+
+def test_fetch_events_raises_when_every_item_fails_to_parse():
+    """A batch that is 100% parse failures must not look like a clean empty sync.
+
+    Returning [] here would be indistinguishable from a genuinely empty
+    calendar to _sync_loop, which would then prune_absent() the entire cache
+    on what is actually a parsing bug, not a real state.
+    """
+    malformed = [
+        _raw(id="bad1", start={"dateTime": "not-a-real-datetime"}),
+        _raw(id="bad2", start={"dateTime": "also-not-real"}),
+    ]
+    service = _FakeService({"items": malformed})
+
+    with pytest.raises(ValueError):
+        fetch_events(service, "primary", datetime(2026, 7, 20, tzinfo=UTC))
+
+
+def test_fetch_events_with_genuinely_empty_items_returns_empty():
+    """A real empty calendar (items: []) is a real state, not a failure."""
+    service = _FakeService({"items": []})
+
+    events = fetch_events(service, "primary", datetime(2026, 7, 20, tzinfo=UTC))
+
+    assert events == []

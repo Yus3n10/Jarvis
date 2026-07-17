@@ -80,17 +80,31 @@ def fetch_events(
         )
         .execute()
     )
+    items = result.get("items", [])
     events = []
-    for raw in result.get("items", []):
+    parse_failures = 0
+    for raw in items:
         try:
             event = parse_event(raw)
         except Exception:
             log.warning(
                 "skipping malformed calendar event id=%s", raw.get("id"), exc_info=True
             )
+            parse_failures += 1
             continue
         if event is not None:
             events.append(event)
+
+    if items and parse_failures == len(items):
+        # Every single item blew up inside parse_event - almost certainly a
+        # schema change or a wholesale parsing bug, not a real "nothing to
+        # announce" calendar. Returning [] here would look identical to a
+        # genuinely empty calendar to the caller, and _sync_loop would then
+        # prune_absent() the entire cache on what is actually a failure.
+        raise ValueError(
+            f"all {len(items)} calendar item(s) failed to parse - refusing to "
+            "report a silently empty sync"
+        )
     return events
 
 
