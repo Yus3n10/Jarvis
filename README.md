@@ -32,8 +32,9 @@ the read-only Google Calendar poll.
 
 ## Scope
 
-Jarvis addresses knowing an appointment is imminent. It does not wake heavy
-sleepers — it speaks, and sound does not rouse everyone. See
+Jarvis addresses knowing an appointment is imminent. It is an announcer, not an
+alarm: it assumes the listener is awake and within earshot, and makes no attempt
+to rouse a sleeping user. See
 `docs/superpowers/specs/2026-07-17-jarvis-butler-design.md`.
 
 ## Hardware
