@@ -36,8 +36,9 @@ async def _sync_loop(store: Store, config: Config) -> None:
                 service = await asyncio.to_thread(
                     build_service, ROOT / "credentials.json", ROOT / "token.json"
                 )
+            now = datetime.now(UTC)
             events = await asyncio.to_thread(
-                fetch_events, service, config.calendar_id, datetime.now(UTC)
+                fetch_events, service, config.calendar_id, now
             )
             store.upsert_events(events)
             # Only reachable on success - a network blip must never prune the
@@ -45,6 +46,10 @@ async def _sync_loop(store: Store, config: Config) -> None:
             deleted = store.prune_absent({e.id for e in events})
             if deleted > 0:
                 log.info("pruned %d event(s) no longer on the calendar", deleted)
+            # Also only reachable on success - this is the signal the
+            # dashboard uses to detect a sync that has silently died, so it
+            # must never be written on a failed or partial pass.
+            store.sync_ok(now)
         except Exception as exc:
             # Network down is expected and survivable — the cache carries us.
             log.warning("calendar sync failed, running from cache: %s", exc)
@@ -56,7 +61,12 @@ async def _tick_loop(store: Store, config: Config) -> None:
     voice = _voice()
     while True:
         try:
-            tick(datetime.now(UTC), store, voice, config)
+            # tick() -> voice.speak() runs blocking subprocess.run calls (up
+            # to 30s + 60s). Running it inline on the event loop would freeze
+            # _sync_loop and the web server for that whole window - uvicorn
+            # couldn't even read an incoming ACK POST, so a tap on the
+            # touchscreen would silently do nothing.
+            await asyncio.to_thread(tick, datetime.now(UTC), store, voice, config)
         except Exception:
             log.exception("tick failed")
         await asyncio.sleep(10)
