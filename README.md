@@ -80,9 +80,13 @@ be able to follow this end to end.
 
 5. **Install the systemd service and kiosk autostart.**
 
-       sudo cp deploy/jarvis.service /etc/systemd/system/
-       sudo systemctl enable --now jarvis
-       mkdir -p ~/.config/autostart && cp deploy/kiosk.desktop ~/.config/autostart/
+       sudo ./deploy/install.sh
+
+   The unit is generated from `deploy/jarvis.service.in` rather than copied,
+   because Raspberry Pi OS no longer creates a default `pi` user — the
+   username is chosen at imaging time, so a hardcoded `User=` fails on most
+   current installs. The script substitutes the invoking user and their home,
+   then enables the service and installs the kiosk entry.
 
 6. **Verify.**
 
