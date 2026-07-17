@@ -33,8 +33,12 @@ async def _sync_loop(store: Store, config: Config) -> None:
     while True:
         try:
             if service is None:
-                service = build_service(ROOT / "credentials.json", ROOT / "token.json")
-            events = fetch_events(service, config.calendar_id, datetime.now(UTC))
+                service = await asyncio.to_thread(
+                    build_service, ROOT / "credentials.json", ROOT / "token.json"
+                )
+            events = await asyncio.to_thread(
+                fetch_events, service, config.calendar_id, datetime.now(UTC)
+            )
             store.upsert_events(events)
             # Only reachable on success - a network blip must never prune the
             # cache, or a WiFi drop would look like the calendar going empty.

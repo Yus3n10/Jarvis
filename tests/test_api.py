@@ -35,6 +35,11 @@ class FailingVoice:
         return False
 
 
+class RaisingVoice:
+    def speak(self, text: str) -> bool:
+        raise RuntimeError("speaker wedged")
+
+
 def test_tick_speaks_when_due(store):
     voice = NullVoice()
     said = tick(START - timedelta(minutes=60), store, voice, Config())
@@ -85,6 +90,20 @@ def test_tick_writes_heartbeat(store):
     now = START - timedelta(minutes=90)
     tick(now, store, NullVoice(), Config())
     assert store.last_heartbeat() == now
+
+
+def test_tick_does_not_write_heartbeat_when_it_raises(store):
+    """A pass that dies partway through must not look like a healthy pass.
+
+    The heartbeat means "I completed a pass", not "I started one" - otherwise
+    a Jarvis wedged on the same exception every 10 seconds would refresh its
+    heartbeat forever while never announcing anything, and the dashboard would
+    never show NOT UPDATING.
+    """
+    now = START - timedelta(minutes=60)
+    with pytest.raises(RuntimeError):
+        tick(now, store, RaisingVoice(), Config())
+    assert store.last_heartbeat() is None
 
 
 def test_max_attempts_marks_failed_and_silences(store):

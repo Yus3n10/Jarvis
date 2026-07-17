@@ -20,8 +20,14 @@ def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
 
     An utterance is only recorded as spoken if voice.speak() confirms playback.
     A failed speaker must leave the announcement pending so it is retried.
+
+    The heartbeat is written last, only once the pass has completed without
+    raising. It means "I completed a pass", not "I started one" - if it meant
+    the latter, a pass that dies every time on the same exception would keep
+    refreshing the heartbeat forever while never actually announcing anything,
+    and the dashboard would show a healthy Jarvis that is in fact permanently
+    mute.
     """
-    store.heartbeat(now)
     events = store.all_events()
     announcements = store.all_announcements()
 
@@ -37,6 +43,7 @@ def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
             spoken.append(utt.text)
         else:
             log.warning("playback failed, leaving pending: %s", utt.text)
+    store.heartbeat(now)
     return spoken
 
 
