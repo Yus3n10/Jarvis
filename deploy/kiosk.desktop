@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Jarvis Kiosk
+Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --incognito --check-for-update-interval=31536000 http://localhost:8000
+X-GNOME-Autostart-enabled=true

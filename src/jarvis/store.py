@@ -187,3 +187,19 @@ class Store:
             "SELECT value FROM meta WHERE key = 'heartbeat'"
         ).fetchone()
         return None if row is None else _parse(row["value"])
+
+    def prune_absent(self, keep_ids: set[str]) -> int:
+        """Delete every event not in keep_ids, and its announcements with it.
+
+        Called only after a successful sync, so an empty result from the
+        calendar (or a network failure) never wipes the cache - a missing
+        keep_ids entry means the calendar authoritatively no longer has that
+        event, not that we failed to hear about it.
+        """
+        rows = self._conn.execute("SELECT id FROM events").fetchall()
+        stale_ids = [r["id"] for r in rows if r["id"] not in keep_ids]
+        for event_id in stale_ids:
+            self._conn.execute("DELETE FROM announcements WHERE event_id = ?", (event_id,))
+            self._conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        self._conn.commit()
+        return len(stale_ids)

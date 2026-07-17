@@ -124,3 +124,32 @@ def test_duplicate_reminders_do_not_replan(store):
     store.ack("evt1")
     store.upsert_events([_event(reminder_minutes=(60, 60, 10))])
     assert {a.state for a in store.all_announcements()} == {"acked"}
+
+
+def test_prune_absent_deletes_event_and_its_announcements(store):
+    store.upsert_events([_event(id="evt1"), _event(id="evt2")])
+    store.prune_absent({"evt2"})
+    assert [e.id for e in store.all_events()] == ["evt2"]
+    assert all(a.event_id != "evt1" for a in store.all_announcements())
+
+
+def test_prune_absent_keeps_events_in_keep_ids_including_ack_state(store):
+    store.upsert_events([_event(id="evt1"), _event(id="evt2")])
+    store.ack("evt1")
+    store.prune_absent({"evt1", "evt2"})
+    got = store.all_events()
+    assert {e.id for e in got} == {"evt1", "evt2"}
+    assert {a.state for a in store.all_announcements() if a.event_id == "evt1"} == {"acked"}
+
+
+def test_prune_absent_with_empty_keep_ids_deletes_everything(store):
+    store.upsert_events([_event(id="evt1"), _event(id="evt2")])
+    store.prune_absent(set())
+    assert store.all_events() == []
+    assert store.all_announcements() == []
+
+
+def test_prune_absent_returns_count_deleted(store):
+    store.upsert_events([_event(id="evt1"), _event(id="evt2"), _event(id="evt3")])
+    deleted = store.prune_absent({"evt3"})
+    assert deleted == 2
