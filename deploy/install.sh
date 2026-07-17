@@ -40,8 +40,12 @@ sed -e "s#@USER@#$TARGET_USER#g" -e "s#@HOME@#$TARGET_HOME#g" \
 echo "  wrote /etc/systemd/system/jarvis.service"
 
 systemctl daemon-reload
-systemctl enable --now jarvis
-echo "  service enabled and started"
+systemctl enable jarvis >/dev/null
+# restart, not "enable --now": --now only starts a stopped unit, so re-running
+# this script would rewrite the unit file and leave the old process running with
+# the old settings.
+systemctl restart jarvis
+echo "  service enabled and (re)started"
 
 # Kiosk autostart. Bookworm on a Pi 5 defaults to Wayland (wayfire/labwc), which
 # does not read ~/.config/autostart the way the old X11/LXDE session did.
