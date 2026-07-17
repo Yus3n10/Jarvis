@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from jarvis.config import Config
 from jarvis.domain import Announcement, Event
 from jarvis.scheduler import give_up, is_due
@@ -159,3 +161,48 @@ def test_config_load_ignores_unknown_keys(tmp_path):
     assert config.calendar_id == "primary"  # default
     assert not hasattr(config, 'unknown_key')
     assert not hasattr(config, 'another_unknown')
+
+
+def test_config_load_invalid_toml_raises_naming_the_file(tmp_path):
+    """A hand-typed typo must fail loudly, not crash-loop with no clue why."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("max_attempts = [unterminated\n")
+
+    with pytest.raises(ValueError, match=r"config\.toml"):
+        Config.load(config_path)
+
+
+def test_config_load_rejects_string_poll_seconds(tmp_path):
+    """poll_seconds as a string would otherwise reach asyncio.sleep() and die
+    outside the try in _sync_loop, taking the whole gather() down with it."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('poll_seconds = "300"\n')
+
+    with pytest.raises(ValueError, match="poll_seconds"):
+        Config.load(config_path)
+
+
+def test_config_load_rejects_string_max_attempts(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('max_attempts = "5"\n')
+
+    with pytest.raises(ValueError, match="max_attempts"):
+        Config.load(config_path)
+
+
+def test_config_load_rejects_boolean_max_attempts(tmp_path):
+    """TOML booleans are ints under isinstance() - must be explicitly rejected."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("max_attempts = true\n")
+
+    with pytest.raises(ValueError, match="max_attempts"):
+        Config.load(config_path)
+
+
+def test_config_load_still_allows_none_max_attempts_by_omission(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("poll_seconds = 60\n")
+
+    config = Config.load(config_path)
+    assert config.max_attempts is None
+    assert config.poll_seconds == 60
