@@ -182,6 +182,17 @@ def test_config_load_rejects_string_poll_seconds(tmp_path):
         Config.load(config_path)
 
 
+def test_config_load_rejects_non_positive_poll_seconds(tmp_path):
+    """A zero or negative interval turns the sync loop into a busy loop against
+    the Google API, which is a good way to get rate-limited."""
+    for value in (0, -30):
+        config_path = tmp_path / f"config{value}.toml"
+        config_path.write_text(f"poll_seconds = {value}\n")
+
+        with pytest.raises(ValueError, match="positive"):
+            Config.load(config_path)
+
+
 def test_config_load_rejects_string_max_attempts(tmp_path):
     config_path = tmp_path / "config.toml"
     config_path.write_text('max_attempts = "5"\n')

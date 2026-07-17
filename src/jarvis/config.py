@@ -42,5 +42,9 @@ class Config:
             v = known["poll_seconds"]
             if isinstance(v, bool) or not isinstance(v, int):
                 raise ValueError(f"{path}: poll_seconds must be an integer, got {v!r}")
+            # A non-positive interval turns the sync loop into a busy loop against
+            # the Google API, which is a good way to get rate-limited.
+            if v <= 0:
+                raise ValueError(f"{path}: poll_seconds must be positive, got {v!r}")
 
         return cls(**known)
