@@ -6,6 +6,7 @@ enter or leave this module.
 """
 
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -53,6 +54,16 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        # api.py's routes are sync `def`s, so Starlette dispatches them to its
+        # threadpool - store is genuinely driven from two threads (that
+        # threadpool and the tick/sync loops) against one connection with no
+        # transaction isolation of its own. Without this lock, one thread's
+        # commit() can commit another thread's in-flight read-modify-write,
+        # e.g. an ack landing mid-replan while events are deleted and
+        # re-inserted. One lock, held for each write method's full
+        # read-modify-write + commit, keeps each call atomic. None of these
+        # methods call another locked method, so a plain Lock cannot deadlock.
+        self._lock = threading.Lock()
 
     def close(self) -> None:
         self._conn.close()
@@ -66,54 +77,55 @@ class Store:
         because a 7am warning for an 8am meeting is wrong once the meeting
         becomes 10am, and a reminder the user turned off should stop firing.
         """
-        for event in events:
-            row = self._conn.execute(
-                "SELECT start_utc, end_utc, declined, reminder_minutes FROM events WHERE id = ?",
-                (event.id,),
-            ).fetchone()
-            moved = row is not None and _parse(row["start_utc"]) != event.start_utc
-            declined_changed = row is not None and bool(row["declined"]) != event.declined
-            if row is not None:
-                stored_event = Event(
-                    id=event.id,
-                    title=event.title,
-                    start_utc=_parse(row["start_utc"]),
-                    end_utc=_parse(row["end_utc"]),
-                    declined=bool(row["declined"]),
-                    reminder_minutes=_parse_reminders(row["reminder_minutes"]),
-                )
-                reminders_changed = rungs_for(stored_event) != rungs_for(event)
-            else:
-                reminders_changed = False
-
-            self._conn.execute(
-                """INSERT INTO events (id, title, start_utc, end_utc, declined, reminder_minutes)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                       title=excluded.title, start_utc=excluded.start_utc,
-                       end_utc=excluded.end_utc, declined=excluded.declined,
-                       reminder_minutes=excluded.reminder_minutes""",
-                (
-                    event.id,
-                    event.title,
-                    _iso(event.start_utc),
-                    _iso(event.end_utc),
-                    int(event.declined),
-                    ",".join(str(m) for m in event.reminder_minutes),
-                ),
-            )
-
-            if row is None or moved or declined_changed or reminders_changed:
-                self._conn.execute(
-                    "DELETE FROM announcements WHERE event_id = ?", (event.id,)
-                )
-                for ann in plan_announcements(event):
-                    self._conn.execute(
-                        """INSERT INTO announcements (event_id, rung_minutes, due_utc)
-                           VALUES (?, ?, ?)""",
-                        (ann.event_id, ann.rung_minutes, _iso(ann.due_utc)),
+        with self._lock:
+            for event in events:
+                row = self._conn.execute(
+                    "SELECT start_utc, end_utc, declined, reminder_minutes FROM events WHERE id = ?",
+                    (event.id,),
+                ).fetchone()
+                moved = row is not None and _parse(row["start_utc"]) != event.start_utc
+                declined_changed = row is not None and bool(row["declined"]) != event.declined
+                if row is not None:
+                    stored_event = Event(
+                        id=event.id,
+                        title=event.title,
+                        start_utc=_parse(row["start_utc"]),
+                        end_utc=_parse(row["end_utc"]),
+                        declined=bool(row["declined"]),
+                        reminder_minutes=_parse_reminders(row["reminder_minutes"]),
                     )
-        self._conn.commit()
+                    reminders_changed = rungs_for(stored_event) != rungs_for(event)
+                else:
+                    reminders_changed = False
+
+                self._conn.execute(
+                    """INSERT INTO events (id, title, start_utc, end_utc, declined, reminder_minutes)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           title=excluded.title, start_utc=excluded.start_utc,
+                           end_utc=excluded.end_utc, declined=excluded.declined,
+                           reminder_minutes=excluded.reminder_minutes""",
+                    (
+                        event.id,
+                        event.title,
+                        _iso(event.start_utc),
+                        _iso(event.end_utc),
+                        int(event.declined),
+                        ",".join(str(m) for m in event.reminder_minutes),
+                    ),
+                )
+
+                if row is None or moved or declined_changed or reminders_changed:
+                    self._conn.execute(
+                        "DELETE FROM announcements WHERE event_id = ?", (event.id,)
+                    )
+                    for ann in plan_announcements(event):
+                        self._conn.execute(
+                            """INSERT INTO announcements (event_id, rung_minutes, due_utc)
+                               VALUES (?, ?, ?)""",
+                            (ann.event_id, ann.rung_minutes, _iso(ann.due_utc)),
+                        )
+            self._conn.commit()
 
     def all_events(self) -> list[Event]:
         rows = self._conn.execute("SELECT * FROM events").fetchall()
@@ -145,42 +157,47 @@ class Store:
         ]
 
     def mark_spoken(self, ann: Announcement, at: datetime) -> None:
-        self._conn.execute(
-            """UPDATE announcements SET last_spoken_utc = ?, attempts = attempts + 1
-               WHERE event_id = ? AND rung_minutes = ?""",
-            (_iso(at), ann.event_id, ann.rung_minutes),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE announcements SET last_spoken_utc = ?, attempts = attempts + 1
+                   WHERE event_id = ? AND rung_minutes = ?""",
+                (_iso(at), ann.event_id, ann.rung_minutes),
+            )
+            self._conn.commit()
 
     def mark_state(self, ann: Announcement, state: str) -> None:
-        self._conn.execute(
-            "UPDATE announcements SET state = ? WHERE event_id = ? AND rung_minutes = ?",
-            (state, ann.event_id, ann.rung_minutes),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE announcements SET state = ? WHERE event_id = ? AND rung_minutes = ?",
+                (state, ann.event_id, ann.rung_minutes),
+            )
+            self._conn.commit()
 
     def ack(self, event_id: str) -> None:
-        self._conn.execute(
-            "UPDATE announcements SET state = 'acked' WHERE event_id = ? AND state = 'pending'",
-            (event_id,),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE announcements SET state = 'acked' WHERE event_id = ? AND state = 'pending'",
+                (event_id,),
+            )
+            self._conn.commit()
 
     def snooze(self, event_id: str, until: datetime) -> None:
-        self._conn.execute(
-            """UPDATE announcements SET snoozed_until_utc = ?
-               WHERE event_id = ? AND state = 'pending'""",
-            (_iso(until), event_id),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE announcements SET snoozed_until_utc = ?
+                   WHERE event_id = ? AND state = 'pending'""",
+                (_iso(until), event_id),
+            )
+            self._conn.commit()
 
     def heartbeat(self, at: datetime) -> None:
-        self._conn.execute(
-            """INSERT INTO meta (key, value) VALUES ('heartbeat', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (_iso(at),),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO meta (key, value) VALUES ('heartbeat', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (_iso(at),),
+            )
+            self._conn.commit()
 
     def last_heartbeat(self) -> datetime | None:
         row = self._conn.execute(
@@ -197,12 +214,13 @@ class Store:
         healthy while sync is permanently dead, so the two must be tracked
         separately.
         """
-        self._conn.execute(
-            """INSERT INTO meta (key, value) VALUES ('last_sync_ok', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (_iso(at),),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO meta (key, value) VALUES ('last_sync_ok', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (_iso(at),),
+            )
+            self._conn.commit()
 
     def last_sync_ok(self) -> datetime | None:
         row = self._conn.execute(
@@ -218,10 +236,11 @@ class Store:
         keep_ids entry means the calendar authoritatively no longer has that
         event, not that we failed to hear about it.
         """
-        rows = self._conn.execute("SELECT id FROM events").fetchall()
-        stale_ids = [r["id"] for r in rows if r["id"] not in keep_ids]
-        for event_id in stale_ids:
-            self._conn.execute("DELETE FROM announcements WHERE event_id = ?", (event_id,))
-            self._conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
-        self._conn.commit()
-        return len(stale_ids)
+        with self._lock:
+            rows = self._conn.execute("SELECT id FROM events").fetchall()
+            stale_ids = [r["id"] for r in rows if r["id"] not in keep_ids]
+            for event_id in stale_ids:
+                self._conn.execute("DELETE FROM announcements WHERE event_id = ?", (event_id,))
+                self._conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+            self._conn.commit()
+            return len(stale_ids)
