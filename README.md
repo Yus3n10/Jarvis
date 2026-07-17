@@ -78,7 +78,34 @@ be able to follow this end to end.
 
        cd ui && npm ci && npm run build
 
-5. **Install the systemd service and kiosk autostart.**
+   Vite needs Node >= 20.19, but Debian 12's `apt install nodejs` gives you
+   18 — so building on the Pi means installing Node from NodeSource or nvm
+   first. Simpler: build on the laptop and copy the output, since `dist/` is
+   ~200KB of static files the Pi only ever serves.
+
+       scp -r ui/dist you@raspberrypi:~/jarvis/ui/
+
+5. **Install Piper and a voice.** Without this Jarvis starts fine, logs
+   `piper not found, using NullVoice`, and never makes a sound — which for an
+   appliance whose whole job is speaking is a silent failure worth avoiding.
+
+       mkdir -p ~/piper && cd ~/piper
+       curl -sL -o piper.tar.gz https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz
+       tar xzf piper.tar.gz && mv piper _p && mv _p/* . && rmdir _p && rm piper.tar.gz
+
+       V=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium
+       curl -sL -O $V/en_GB-alan-medium.onnx
+       curl -sL -O $V/en_GB-alan-medium.onnx.json
+
+   Note the release tag: `2023.11.14-2` is the one whose asset is named
+   `piper_linux_aarch64.tar.gz`. Other tags name their arm64 asset
+   `piper_arm64.tar.gz`, so a mismatched tag/filename pair 404s and you
+   untar a 4KB error page.
+
+   Any voice from [piper-voices](https://huggingface.co/rhasspy/piper-voices)
+   works — swap the model and repoint `PIPER_MODEL` in the unit.
+
+6. **Install the systemd service and kiosk autostart.**
 
        sudo ./deploy/install.sh
 
@@ -88,7 +115,7 @@ be able to follow this end to end.
    current installs. The script substitutes the invoking user and their home,
    then enables the service and installs the kiosk entry.
 
-6. **Verify.**
+7. **Verify.**
 
        systemctl status jarvis          # expect: active (running)
        journalctl -u jarvis -f          # expect: sync succeeding, no tracebacks

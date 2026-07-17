@@ -11,7 +11,7 @@ ExecStart=@HOME@/jarvis/.venv/bin/python -m jarvis
 Restart=always
 RestartSec=5
 Environment=PIPER_BIN=@HOME@/piper/piper
-Environment=PIPER_MODEL=@HOME@/piper/en_US-amy-medium.onnx
+Environment=PIPER_MODEL=@HOME@/piper/en_GB-alan-medium.onnx
 # Quoted: systemd splits Environment= on whitespace, so an unquoted value would
 # set AUDIO_PLAYER=aplay and silently discard the arguments.
 Environment="AUDIO_PLAYER=aplay -q -"
