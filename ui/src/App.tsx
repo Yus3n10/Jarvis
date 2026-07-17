@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
 type EventRow = {
@@ -16,6 +16,14 @@ type State = {
 };
 
 const PHT = "Asia/Manila";
+
+// The backend pushes a payload roughly once a second. If the client hasn't
+// heard anything in this long, the socket is effectively dead even though
+// nothing told us so directly -- a dead socket can't report its own death,
+// so we detect it by silence instead of waiting to be told.
+const STALE_AFTER_MS = 5000;
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 10000;
 
 function clockTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-PH", {
@@ -39,12 +47,68 @@ function countdown(startIso: string, nowIso: string) {
 
 export default function App() {
   const [state, setState] = useState<State | null>(null);
+  const [connected, setConnected] = useState(false);
+  const lastMessageAtRef = useRef<number | null>(null);
+  // Ticking state has no meaning of its own -- it exists only to force a
+  // re-render every second so a silent (dead) socket still gets re-checked
+  // for staleness even though no message arrives to trigger one.
+  const [, setTick] = useState(0);
 
   useEffect(() => {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${proto}//${location.host}/ws`);
-    socket.onmessage = (e) => setState(JSON.parse(e.data));
-    return () => socket.close();
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = RECONNECT_MIN_MS;
+
+    const connect = () => {
+      if (cancelled) return;
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${proto}//${location.host}/ws`);
+
+      socket.onopen = () => {
+        if (cancelled) return;
+        reconnectDelay = RECONNECT_MIN_MS;
+        setConnected(true);
+      };
+
+      socket.onmessage = (e) => {
+        if (cancelled) return;
+        lastMessageAtRef.current = Date.now();
+        setState(JSON.parse(e.data));
+      };
+
+      socket.onclose = () => {
+        if (cancelled) return;
+        setConnected(false);
+        reconnectTimer = setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+          connect();
+        }, reconnectDelay);
+      };
+
+      socket.onerror = () => {
+        // onerror is always followed by onclose, which schedules the
+        // reconnect -- just make sure the socket actually closes.
+        socket?.close();
+      };
+    };
+
+    connect();
+
+    const tick = setInterval(() => setTick((t) => t + 1), 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(tick);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.close();
+      }
+    };
   }, []);
 
   if (!state) return <div className="screen loading">Connecting…</div>;
@@ -59,12 +123,17 @@ export default function App() {
     month: "long",
   });
 
+  const silentTooLong =
+    lastMessageAtRef.current === null ||
+    Date.now() - lastMessageAtRef.current > STALE_AFTER_MS;
+  const isStale = state.stale || !connected || silentTooLong;
+
   return (
     <div className="screen">
       <header>
         <div className="clock">{clockTime(state.now_utc)}</div>
         <div className="date">{today}</div>
-        {state.stale && <div className="stale">NOT UPDATING</div>}
+        {isStale && <div className="stale">NOT UPDATING</div>}
       </header>
 
       {state.events.length === 0 && <div className="empty">Nothing scheduled</div>}
