@@ -54,6 +54,9 @@ class NullVoice:
         log.info("NullVoice would say: %s", text)
         return True
 
+    def play_wav(self, path: str) -> bool:
+        return True
+
 
 class Voice:
     def __init__(self, piper_bin: Path, model: Path, player: list[str], mouth=None) -> None:
@@ -69,6 +72,24 @@ class Voice:
             with self._mouth:
                 return self._speak(text)
         return self._speak(text)
+
+    def play_wav(self, path: str) -> bool:
+        """Play a WAV file through the same player, holding the mouth. Used for the
+        short 'thinking' cue while a reply is being prepared."""
+        def _go() -> bool:
+            try:
+                with open(path, "rb") as f:
+                    audio = _prepend_silence(f.read(), _LEAD_SILENCE_SECONDS)
+                played = subprocess.run(self._player, input=audio, capture_output=True, timeout=15)
+                return played.returncode == 0
+            except (OSError, subprocess.SubprocessError) as exc:
+                log.error("play_wav failed: %s", exc)
+                return False
+
+        if self._mouth is not None:
+            with self._mouth:
+                return _go()
+        return _go()
 
     def _speak(self, text: str) -> bool:
         try:

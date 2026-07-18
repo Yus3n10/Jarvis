@@ -49,6 +49,21 @@ def _start_ears(store: Store, voice, mouth: Mouth) -> None:
         log.exception("could not start voice input; continuing without it")
 
 
+def _start_speaker_keeper() -> None:
+    """Keep a configured Bluetooth speaker connected. Optional and additive: with
+    no SPEAKER_MAC set it does nothing."""
+    mac = os.environ.get("SPEAKER_MAC", "").strip()
+    if not mac:
+        return
+    try:
+        from jarvis.speaker import SpeakerKeeper
+
+        keeper = SpeakerKeeper(mac)
+        threading.Thread(target=keeper.run, name="speaker-keeper", daemon=True).start()
+    except Exception:
+        log.exception("could not start the speaker keeper; continuing without it")
+
+
 async def _sync_loop(store: Store, config: Config) -> None:
     service = None
     while True:
@@ -99,6 +114,7 @@ async def main() -> None:
     mouth = Mouth()
     voice, is_real = _make_voice(mouth)
     if is_real:
+        _start_speaker_keeper()
         _start_ears(store, voice, mouth)
 
     server = uvicorn.Server(

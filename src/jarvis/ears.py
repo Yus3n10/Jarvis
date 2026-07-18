@@ -8,9 +8,12 @@ and the announcer + touchscreen ack are unaffected.
 """
 
 import logging
+import math
+import struct
 import subprocess
 import threading
 import time
+import wave
 from datetime import UTC, datetime, timedelta
 
 from jarvis import phrasing
@@ -27,6 +30,23 @@ from jarvis.intent import (
 log = logging.getLogger(__name__)
 
 _CMD_WAV = "/tmp/jarvis_cmd.wav"
+_PING_WAV = "/tmp/jarvis_ping.wav"
+
+
+def _make_ping(path: str) -> None:
+    """Write a soft ~0.18s tone -- the 'I'm thinking, please wait' cue."""
+    rate, dur, freq = 16000, 0.18, 880.0
+    n = int(rate * dur)
+    frames = bytearray()
+    for i in range(n):
+        env = math.sin(math.pi * i / n)  # fade in and out
+        val = int(0.25 * env * 32767 * math.sin(2 * math.pi * freq * i / rate))
+        frames += struct.pack("<h", val)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
 
 
 def _needs_ack_ids(store) -> set[str]:
@@ -97,6 +117,10 @@ class Ears:
         self._refractory = refractory
         self._rec = record_seconds
         self._stop = threading.Event()
+        try:
+            _make_ping(_PING_WAV)
+        except Exception:
+            log.warning("could not create the thinking cue; continuing without it")
 
     def stop(self) -> None:
         self._stop.set()
@@ -136,14 +160,19 @@ class Ears:
                 if score > self._threshold and time.time() - last > self._refractory:
                     last = time.time()
                     self._voice.speak("Yes?")
-                    text = self._capture()
+                    self._record()
+                    # the "thinking" cue: tells the user we heard them and are
+                    # working, so they wait through the transcribe + reply gap
+                    # instead of talking over the silence.
+                    self._voice.play_wav(_PING_WAV)
+                    text = self._trans.transcribe(_CMD_WAV)
                     reply = handle(text, datetime.now(UTC), self._store, self._conv)
                     log.info("ears: heard %r -> %r", text, reply)
                     self._voice.speak(reply)
                     self._drain(stream, chunk)
                     last = time.time()
 
-    def _capture(self) -> str:
+    def _record(self) -> None:
         try:
             subprocess.run(
                 ["timeout", str(self._rec), "pw-record", "--rate", "48000",
@@ -152,8 +181,6 @@ class Ears:
             )
         except subprocess.SubprocessError as exc:
             log.error("command capture failed: %s", exc)
-            return ""
-        return self._trans.transcribe(_CMD_WAV)
 
     def _drain(self, stream, chunk: int) -> None:
         try:
