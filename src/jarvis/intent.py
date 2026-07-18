@@ -86,7 +86,9 @@ def _extract_minutes(text: str) -> int:
 
 
 def _has_any(text: str, needles) -> bool:
-    return any(n in text for n in needles)
+    # Whole-word (or whole-phrase) match, never a substring: "ok" must not match
+    # inside "joke", nor "broken". Needles may be multi-word ("what time").
+    return any(re.search(rf"\b{re.escape(n)}\b", text) for n in needles)
 
 
 def parse(transcript: str) -> Intent:

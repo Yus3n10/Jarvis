@@ -104,6 +104,16 @@ def test_unknown(text):
     assert parse(text) == Unknown()
 
 
+@pytest.mark.parametrize("text", [
+    "tell me a joke",       # "joke" contains "ok" -- must NOT match Ack
+    "that is no joke",
+    "i think it is broken",  # "broken" contains "ok"
+])
+def test_substrings_do_not_false_match_commands(text):
+    # keyword matching must be on whole words, not substrings
+    assert parse(text) == Unknown()
+
+
 def test_punctuation_and_case_ignored():
     assert parse("  OKAY!!  ") == Ack()
     assert parse("Snooze, please.") == Snooze(DEFAULT_SNOOZE_MINUTES)
