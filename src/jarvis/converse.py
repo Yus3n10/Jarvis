@@ -86,7 +86,7 @@ class Conversation:
     def __init__(
         self,
         api_key: str | None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-flash-latest",
         max_turns: int = 6,
         generate=None,
     ) -> None:
