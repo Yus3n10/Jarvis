@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import uvicorn
 from jarvis.api import create_app, tick
 from jarvis.config import Config
 from jarvis.gcal import build_service, fetch_events
+from jarvis.mouth import Mouth
 from jarvis.store import Store
 from jarvis.voice import NullVoice, Voice
 
@@ -18,14 +20,33 @@ log = logging.getLogger("jarvis")
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _voice():
+def _make_voice(mouth: Mouth):
+    """Return (voice, is_real). is_real is False when Piper is absent (NullVoice)."""
     piper = Path(os.environ.get("PIPER_BIN", Path.home() / "piper/piper"))
     model = Path(os.environ.get("PIPER_MODEL", Path.home() / "piper/en_US-amy-medium.onnx"))
     if not piper.exists() or not model.exists():
         log.warning("piper not found, using NullVoice (no audio)")
-        return NullVoice()
+        return NullVoice(mouth), False
     player = os.environ.get("AUDIO_PLAYER", "aplay -q -").split()
-    return Voice(piper, model, player)
+    return Voice(piper, model, player, mouth), True
+
+
+def _start_ears(store: Store, voice, mouth: Mouth) -> None:
+    """Start the voice-input loop in a daemon thread. Additive: any failure here
+    (missing voice deps, no mic, whisper load error) just disables voice input;
+    the announcer and touchscreen ack are unaffected."""
+    try:
+        from jarvis.converse import Conversation
+        from jarvis.ears import Ears
+        from jarvis.hearing import Transcriber
+
+        transcriber = Transcriber(os.environ.get("WHISPER_MODEL", "tiny.en"))
+        conversation = Conversation(os.environ.get("GEMINI_API_KEY") or None)
+        ears = Ears(store, voice, transcriber, conversation, mouth)
+        threading.Thread(target=ears.run, name="ears", daemon=True).start()
+        log.info("voice input enabled (conversation %s)", "on" if conversation.enabled else "off")
+    except Exception:
+        log.exception("could not start voice input; continuing without it")
 
 
 async def _sync_loop(store: Store, config: Config) -> None:
@@ -57,8 +78,7 @@ async def _sync_loop(store: Store, config: Config) -> None:
         await asyncio.sleep(config.poll_seconds)
 
 
-async def _tick_loop(store: Store, config: Config) -> None:
-    voice = _voice()
+async def _tick_loop(store: Store, config: Config, voice) -> None:
     while True:
         try:
             # tick() -> voice.speak() runs blocking subprocess.run calls (up
@@ -76,11 +96,15 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = Config.load(ROOT / "config.toml")
     store = Store(ROOT / "jarvis.db")
+    mouth = Mouth()
+    voice, is_real = _make_voice(mouth)
+    if is_real:
+        _start_ears(store, voice, mouth)
 
     server = uvicorn.Server(
         uvicorn.Config(create_app(store, config), host="0.0.0.0", port=8000, log_level="warning")
     )
-    await asyncio.gather(_sync_loop(store, config), _tick_loop(store, config), server.serve())
+    await asyncio.gather(_sync_loop(store, config), _tick_loop(store, config, voice), server.serve())
 
 
 if __name__ == "__main__":

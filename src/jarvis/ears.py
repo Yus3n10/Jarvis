@@ -1,0 +1,163 @@
+"""The ears: wake word -> record -> transcribe -> handle -> speak. Thin I/O shell.
+
+The audio pipeline (openWakeWord, sounddevice, pw-record) loads lazily inside run(),
+so this module -- and the testable handle() routing -- import with nothing extra.
+
+Voice input is additive: if this loop crashes or the mic is absent, it disables itself
+and the announcer + touchscreen ack are unaffected.
+"""
+
+import logging
+import subprocess
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+
+from jarvis import phrasing
+from jarvis.intent import (
+    Ack,
+    QueryDate,
+    QueryNext,
+    QueryTime,
+    QueryToday,
+    Snooze,
+    parse,
+)
+
+log = logging.getLogger(__name__)
+
+_CMD_WAV = "/tmp/jarvis_cmd.wav"
+
+
+def _needs_ack_ids(store) -> set[str]:
+    return {
+        a.event_id
+        for a in store.all_announcements()
+        if a.state == "pending" and a.last_spoken_utc is not None
+    }
+
+
+def handle(text: str, now: datetime, store, conversation) -> str:
+    """Route a transcript to a spoken reply.
+
+    Commands act locally and deterministically; only Unknown reaches conversation.
+    Pure with respect to its injected store/conversation -- testable without hardware.
+    """
+    intent = parse(text)
+    if isinstance(intent, QueryTime):
+        return phrasing.answer_time(now)
+    if isinstance(intent, QueryDate):
+        return phrasing.answer_date(now)
+    if isinstance(intent, QueryToday):
+        return phrasing.answer_today(now, store.all_events())
+    if isinstance(intent, QueryNext):
+        return phrasing.answer_next(now, store.all_events())
+    if isinstance(intent, Ack):
+        ids = _needs_ack_ids(store)
+        if not ids:
+            return "There is nothing to acknowledge."
+        for i in ids:
+            store.ack(i)
+        return "Okay, acknowledged."
+    if isinstance(intent, Snooze):
+        ids = _needs_ack_ids(store)
+        if not ids:
+            return "There is nothing to snooze."
+        for i in ids:
+            store.snooze(i, now + timedelta(minutes=intent.minutes))
+        return f"Snoozed for {intent.minutes} minutes."
+    # Unknown
+    if conversation.enabled:
+        return conversation.reply(text, now, store.all_events())
+    return "Sorry, I didn't catch that."
+
+
+class Ears:
+    def __init__(
+        self,
+        store,
+        voice,
+        transcriber,
+        conversation,
+        mouth,
+        wake_name: str = "hey_jarvis",
+        device_name: str = "pulse",
+        threshold: float = 0.5,
+        refractory: float = 6.0,
+        record_seconds: int = 4,
+    ) -> None:
+        self._store = store
+        self._voice = voice
+        self._trans = transcriber
+        self._conv = conversation
+        self._mouth = mouth
+        self._wake_name = wake_name
+        self._device = device_name
+        self._threshold = threshold
+        self._refractory = refractory
+        self._rec = record_seconds
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        """Blocking listen loop. Meant to run in its own thread. Never lets an
+        exception escape -- voice input is additive, never load-bearing."""
+        try:
+            self._run()
+        except Exception:
+            log.exception("ears loop crashed; voice input disabled (announcer unaffected)")
+
+    def _run(self) -> None:
+        import sounddevice as sd
+        from openwakeword.model import Model
+
+        wake = Model(wakeword_models=[self._wake_name], inference_framework="onnx")
+        dev = next(
+            (
+                i
+                for i, d in enumerate(sd.query_devices())
+                if d["max_input_channels"] > 0 and d["name"] == self._device
+            ),
+            None,
+        )
+        chunk = 1280  # 80ms at 16k
+        last = 0.0
+        log.info("ears: listening for 'hey %s'", self._wake_name.split("_")[-1])
+        with sd.InputStream(
+            samplerate=16000, channels=1, dtype="int16", blocksize=chunk, device=dev
+        ) as stream:
+            while not self._stop.is_set():
+                data, _ = stream.read(chunk)
+                if self._mouth.busy:  # half-duplex: don't listen while speaking
+                    continue
+                score = float(wake.predict(data[:, 0])[self._wake_name])
+                if score > self._threshold and time.time() - last > self._refractory:
+                    last = time.time()
+                    self._voice.speak("Yes?")
+                    text = self._capture()
+                    reply = handle(text, datetime.now(UTC), self._store, self._conv)
+                    log.info("ears: heard %r -> %r", text, reply)
+                    self._voice.speak(reply)
+                    self._drain(stream, chunk)
+                    last = time.time()
+
+    def _capture(self) -> str:
+        try:
+            subprocess.run(
+                ["timeout", str(self._rec), "pw-record", "--rate", "48000",
+                 "--channels", "1", "--format", "s16", _CMD_WAV],
+                capture_output=True, timeout=self._rec + 3,
+            )
+        except subprocess.SubprocessError as exc:
+            log.error("command capture failed: %s", exc)
+            return ""
+        return self._trans.transcribe(_CMD_WAV)
+
+    def _drain(self, stream, chunk: int) -> None:
+        try:
+            while stream.read_available > chunk:
+                stream.read(chunk)
+        except Exception:
+            pass

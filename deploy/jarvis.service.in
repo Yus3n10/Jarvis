@@ -21,6 +21,10 @@ Environment="AUDIO_PLAYER=aplay -q -"
 # service, so it depends on @USER@ being logged in to a graphical session for
 # that socket to exist; on a kiosk Pi with autologin, it does.
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+# The optional Gemini conversation key. The leading '-' makes it optional: the
+# service starts fine without the file, and voice conversation simply stays off.
+# The file is gitignored and never committed.
+EnvironmentFile=-@HOME@/jarvis/.gemini_env
 
 [Install]
 WantedBy=multi-user.target
