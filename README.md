@@ -27,8 +27,17 @@ channel, not the trigger.
 
 ## Privacy
 
-Speech synthesis runs entirely on-device via Piper. Nothing leaves the Pi except
-the read-only Google Calendar poll.
+The wake word (openWakeWord), speech-to-text (whisper), and speech synthesis
+(Piper) all run entirely on-device. The always-on microphone never streams
+anywhere. Commands — acknowledge, snooze, and schedule queries — are handled
+locally and deterministically; they never reach the cloud.
+
+The one exception is the optional conversation layer: when you say something that
+is *not* a known command, the transcribed text, the day's schedule, and recent
+conversation turns are sent to Google's Gemini API for a spoken reply. This layer
+is disabled entirely when no API key is configured, in which case a non-command
+simply gets "Sorry, I didn't catch that." The read-only Google Calendar poll is
+the only other thing that leaves the Pi.
 
 ## Scope
 
