@@ -49,18 +49,15 @@ def build_prompt(
     """Assemble the full Gemini prompt. Pure -- all inputs are arguments."""
     lines = [PERSONA, "", f"Current time: {_when(now)} (Philippine time)."]
 
-    today = now.astimezone(_PHT).date()
-    todays = sorted(
-        (e for e in events if e.start_utc.astimezone(_PHT).date() == today and not e.declined),
+    upcoming = sorted(
+        (e for e in events if e.start_utc >= now and not e.declined),
         key=lambda e: e.start_utc,
     )
-    if todays:
-        lines.append(
-            "His schedule today: "
-            + "; ".join(f"{e.title} at {_clock(e.start_utc)}" for e in todays)
-        )
+    if upcoming:
+        lines.append("His upcoming schedule:")
+        lines += [f"  {_when(e.start_utc)}: {e.title}" for e in upcoming]
     else:
-        lines.append("His schedule today: nothing scheduled.")
+        lines.append("His schedule is clear.")
 
     if history:
         lines.append("")

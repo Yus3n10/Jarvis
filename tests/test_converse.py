@@ -23,6 +23,13 @@ def test_prompt_includes_pht_time_and_todays_events():
     assert "what's up" in p
 
 
+def test_prompt_includes_a_future_day_event():
+    # regression: an event on a later day must appear, not just today's
+    sat = NOW + timedelta(days=2, hours=3)
+    p = build_prompt(NOW, [_event("Meeting Call", sat)], [], "is saturday clear")
+    assert "Meeting Call" in p
+
+
 def test_prompt_includes_bounded_history():
     history = [("hi", "Good morning."), ("how are you", "Quite well.")]
     p = build_prompt(NOW, [], history, "and now?")
