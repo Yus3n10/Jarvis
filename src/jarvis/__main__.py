@@ -129,7 +129,7 @@ async def main() -> None:
         _start_ears(store, voice, mouth)
 
     server = uvicorn.Server(
-        uvicorn.Config(create_app(store, config), host="0.0.0.0", port=8000, log_level="warning")
+        uvicorn.Config(create_app(store, config, mouth), host="0.0.0.0", port=8000, log_level="warning")
     )
     await asyncio.gather(_sync_loop(store, config), _tick_loop(store, config, voice), server.serve())
 

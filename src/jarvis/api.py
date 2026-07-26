@@ -54,7 +54,7 @@ def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
     return spoken
 
 
-def _state_payload(store: Store, now: datetime, config: Config) -> dict:
+def _state_payload(store: Store, now: datetime, config: Config, mouth=None) -> dict:
     events = sorted(store.all_events(), key=lambda e: e.start_utc)
     anns = store.all_announcements()
     pending = {a.event_id for a in anns if a.state == "pending"}
@@ -71,6 +71,9 @@ def _state_payload(store: Store, now: datetime, config: Config) -> dict:
         "heartbeat_utc": heartbeat.isoformat() if heartbeat else None,
         "last_sync_ok_utc": last_sync_ok.isoformat() if last_sync_ok else None,
         "stale": heartbeat is None or (now - heartbeat) > timedelta(minutes=2) or sync_stale,
+        # The orb reacts to this: True while Jarvis is speaking (the mouth lock
+        # is held). Absent mouth (tests, no audio) reads as not speaking.
+        "speaking": bool(mouth is not None and mouth.busy),
         "events": [
             {
                 "id": e.id,
@@ -90,12 +93,12 @@ def _state_payload(store: Store, now: datetime, config: Config) -> dict:
     }
 
 
-def create_app(store: Store, config: Config) -> FastAPI:
+def create_app(store: Store, config: Config, mouth=None) -> FastAPI:
     app = FastAPI(title="Jarvis")
 
     @app.get("/api/state")
     def state() -> dict:
-        return _state_payload(store, datetime.now(UTC), config)
+        return _state_payload(store, datetime.now(UTC), config, mouth)
 
     @app.post("/api/ack/{event_id}")
     def ack(event_id: str) -> dict:
@@ -112,7 +115,7 @@ def create_app(store: Store, config: Config) -> FastAPI:
         await socket.accept()
         try:
             while True:
-                await socket.send_json(_state_payload(store, datetime.now(UTC), config))
+                await socket.send_json(_state_payload(store, datetime.now(UTC), config, mouth))
                 await asyncio.sleep(1)
         except WebSocketDisconnect:
             pass

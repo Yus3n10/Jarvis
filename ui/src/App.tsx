@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import Orb from "./Orb";
 
 type EventRow = {
   id: string;
@@ -12,6 +13,7 @@ type EventRow = {
 type State = {
   now_utc: string;
   stale: boolean;
+  speaking: boolean;
   events: EventRow[];
 };
 
@@ -55,6 +57,39 @@ export default function App() {
   const [, setTick] = useState(0);
 
   useEffect(() => {
+    // ?demo drives the UI with fake data (toggling "speaking") so the dashboard
+    // and orb can be shown or tested without a live backend or real events.
+    if (new URLSearchParams(location.search).has("demo")) {
+      const events = [
+        {
+          id: "a",
+          title: "Interview with Lumachain",
+          start_utc: new Date(Date.now() + 3600e3).toISOString(),
+          needs_ack: true,
+          failed: false,
+        },
+        {
+          id: "b",
+          title: "Dentist appointment",
+          start_utc: new Date(Date.now() + 3 * 3600e3).toISOString(),
+          needs_ack: false,
+          failed: false,
+        },
+      ];
+      setConnected(true);
+      let speaking = false;
+      const push = () => {
+        lastMessageAtRef.current = Date.now();
+        setState({ now_utc: new Date().toISOString(), stale: false, speaking, events });
+      };
+      push();
+      const iv = setInterval(() => {
+        speaking = !speaking;
+        push();
+      }, 2500);
+      return () => clearInterval(iv);
+    }
+
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -132,33 +167,53 @@ export default function App() {
     Date.now() - lastMessageAtRef.current > STALE_AFTER_MS;
   const isStale = state.stale || !connected || silentTooLong;
 
+  const next = state.events[0];
+
   return (
-    <div className="screen">
-      <header>
-        <div className="clock">{clockTime(state.now_utc)}</div>
-        <div className="date">{today}</div>
-        {isStale && <div className="stale">NOT UPDATING</div>}
-      </header>
+    <div className={`screen${state.speaking ? " speaking" : ""}`}>
+      <Orb intensity={state.speaking ? 1 : 0} />
 
-      {state.events.length === 0 && <div className="empty">Nothing scheduled</div>}
+      <div className="hud">
+        <header>
+          <div className="clockwrap">
+            <div className="clock">{clockTime(state.now_utc)}</div>
+            <div className="date">{today}</div>
+          </div>
+          {isStale && <div className="stale">NOT UPDATING</div>}
+        </header>
 
-      <ul className="events">
-        {state.events.map((e) => (
-          <li key={e.id} className={e.needs_ack ? "event urgent" : "event"}>
-            <div className="when">
-              <span className="at">{clockTime(e.start_utc)}</span>
-              <span className="rel">{countdown(e.start_utc, state.now_utc)}</span>
-            </div>
-            <div className="title">{e.title}</div>
-            {e.failed && <div className="failed">missed</div>}
-            {e.needs_ack && (
-              <button className="ack" onClick={() => ack(e.id)}>
-                OK, I heard you
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+        <div className="center">
+          {state.speaking && <div className="listening">Jarvis is speaking…</div>}
+        </div>
+
+        <footer className="dock">
+          {state.events.length === 0 && <div className="empty">Nothing scheduled</div>}
+          <ul className="events">
+            {state.events.map((e) => (
+              <li
+                key={e.id}
+                className={
+                  "event" +
+                  (e.needs_ack ? " urgent" : "") +
+                  (e === next ? " next" : "")
+                }
+              >
+                <div className="when">
+                  <span className="at">{clockTime(e.start_utc)}</span>
+                  <span className="rel">{countdown(e.start_utc, state.now_utc)}</span>
+                </div>
+                <div className="title">{e.title}</div>
+                {e.failed && <div className="failed">missed</div>}
+                {e.needs_ack && (
+                  <button className="ack" onClick={() => ack(e.id)}>
+                    OK, I heard you
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </footer>
+      </div>
     </div>
   );
 }
