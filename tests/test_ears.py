@@ -95,3 +95,45 @@ def test_command_never_reaches_conversation():
     handle("what time is it", NOW, FakeStore(), conv)
     handle("what's on today", NOW, FakeStore(), conv)
     assert conv.calls == []  # commands are local; the LLM is never consulted
+
+
+class FakePlug:
+    def __init__(self, enabled=True, ok=True):
+        self.enabled = enabled
+        self._ok = ok
+        self.calls = []
+
+    def turn_on(self):
+        self.calls.append("on")
+        return self._ok
+
+    def turn_off(self):
+        self.calls.append("off")
+        return self._ok
+
+
+def test_plug_on_switches_and_never_reaches_conversation():
+    conv = FakeConversation()
+    plug = FakePlug()
+    out = handle("turn on the plug", NOW, FakeStore(), conv, plug)
+    assert out == "Okay, switching it on."
+    assert plug.calls == ["on"]
+    assert conv.calls == []  # a device command must never fall through to the LLM
+
+
+def test_plug_off_switches():
+    plug = FakePlug()
+    out = handle("turn off the charger", NOW, FakeStore(), FakeConversation(), plug)
+    assert out == "Okay, switching it off."
+    assert plug.calls == ["off"]
+
+
+def test_plug_unreachable_is_reported():
+    plug = FakePlug(ok=False)
+    out = handle("turn on the plug", NOW, FakeStore(), FakeConversation(), plug)
+    assert out == "Sorry, I couldn't reach the plug."
+
+
+def test_plug_command_without_a_plug_is_graceful():
+    out = handle("turn on the plug", NOW, FakeStore(), FakeConversation(), None)
+    assert out == "The plug isn't set up."

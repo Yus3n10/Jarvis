@@ -3,6 +3,8 @@ import pytest
 from jarvis.intent import (
     Ack,
     DEFAULT_SNOOZE_MINUTES,
+    PlugOff,
+    PlugOn,
     QueryDate,
     QueryNext,
     QueryTime,
@@ -11,6 +13,44 @@ from jarvis.intent import (
     Unknown,
     parse,
 )
+
+
+@pytest.mark.parametrize("text", [
+    "turn on the plug",
+    "turn the plug on",
+    "switch on the charger",
+    "plug on",
+    "power on the outlet",
+    "start the charger",
+])
+def test_plug_on(text):
+    assert isinstance(parse(text), PlugOn)
+
+
+@pytest.mark.parametrize("text", [
+    "turn off the plug",
+    "turn the charger off",
+    "switch off the outlet",
+    "plug off",
+    "shut off the charger",
+    "stop the charger",
+])
+def test_plug_off(text):
+    assert isinstance(parse(text), PlugOff)
+
+
+def test_off_beats_on_when_both_present():
+    # deliberate: "off" is checked first, so a mixed utterance stays safe-off
+    assert isinstance(parse("turn the plug off not on"), PlugOff)
+
+
+@pytest.mark.parametrize("text", [
+    "on",              # no device noun -> not a plug command
+    "turn it off",     # no device noun
+    "what's the charger",  # device noun but no on/off signal
+])
+def test_bare_direction_is_not_a_plug_command(text):
+    assert not isinstance(parse(text), (PlugOn, PlugOff))
 
 
 @pytest.mark.parametrize("text", [

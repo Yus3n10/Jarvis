@@ -39,12 +39,23 @@ def _start_ears(store: Store, voice, mouth: Mouth) -> None:
         from jarvis.converse import Conversation
         from jarvis.ears import Ears
         from jarvis.hearing import Transcriber
+        from jarvis.plug import Plug
 
         transcriber = Transcriber(os.environ.get("WHISPER_MODEL", "tiny.en"))
         conversation = Conversation(os.environ.get("GEMINI_API_KEY") or None)
-        ears = Ears(store, voice, transcriber, conversation, mouth)
+        plug = Plug(
+            api_key=os.environ.get("TUYA_API_KEY"),
+            api_secret=os.environ.get("TUYA_API_SECRET"),
+            device_id=os.environ.get("TUYA_DEVICE_ID"),
+            region=os.environ.get("TUYA_API_REGION", "sg"),
+        )
+        ears = Ears(store, voice, transcriber, conversation, mouth, plug)
         threading.Thread(target=ears.run, name="ears", daemon=True).start()
-        log.info("voice input enabled (conversation %s)", "on" if conversation.enabled else "off")
+        log.info(
+            "voice input enabled (conversation %s, plug %s)",
+            "on" if conversation.enabled else "off",
+            "on" if plug.enabled else "off",
+        )
     except Exception:
         log.exception("could not start voice input; continuing without it")
 

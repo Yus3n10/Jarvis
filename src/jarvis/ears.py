@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from jarvis import phrasing
 from jarvis.intent import (
     Ack,
+    PlugOff,
+    PlugOn,
     QueryDate,
     QueryNext,
     QueryTime,
@@ -57,13 +59,22 @@ def _needs_ack_ids(store) -> set[str]:
     }
 
 
-def handle(text: str, now: datetime, store, conversation) -> str:
+def handle(text: str, now: datetime, store, conversation, plug=None) -> str:
     """Route a transcript to a spoken reply.
 
     Commands act locally and deterministically; only Unknown reaches conversation.
-    Pure with respect to its injected store/conversation -- testable without hardware.
+    Pure with respect to its injected store/conversation/plug -- testable without
+    hardware. plug may be None (plug control not configured).
     """
     intent = parse(text)
+    if isinstance(intent, PlugOn):
+        if plug is None or not plug.enabled:
+            return "The plug isn't set up."
+        return "Okay, switching it on." if plug.turn_on() else "Sorry, I couldn't reach the plug."
+    if isinstance(intent, PlugOff):
+        if plug is None or not plug.enabled:
+            return "The plug isn't set up."
+        return "Okay, switching it off." if plug.turn_off() else "Sorry, I couldn't reach the plug."
     if isinstance(intent, QueryTime):
         return phrasing.answer_time(now)
     if isinstance(intent, QueryDate):
@@ -100,6 +111,7 @@ class Ears:
         transcriber,
         conversation,
         mouth,
+        plug=None,
         wake_name: str = "hey_jarvis",
         device_name: str = "pulse",
         threshold: float = 0.5,
@@ -111,6 +123,7 @@ class Ears:
         self._trans = transcriber
         self._conv = conversation
         self._mouth = mouth
+        self._plug = plug
         self._wake_name = wake_name
         self._device = device_name
         self._threshold = threshold
@@ -166,7 +179,7 @@ class Ears:
                     # instead of talking over the silence.
                     self._voice.play_wav(_PING_WAV)
                     text = self._trans.transcribe(_CMD_WAV)
-                    reply = handle(text, datetime.now(UTC), self._store, self._conv)
+                    reply = handle(text, datetime.now(UTC), self._store, self._conv, self._plug)
                     log.info("ears: heard %r -> %r", text, reply)
                     self._voice.speak(reply)
                     self._drain(stream, chunk)

@@ -43,11 +43,24 @@ class QueryDate:
 
 
 @dataclass(frozen=True)
+class PlugOn:
+    pass
+
+
+@dataclass(frozen=True)
+class PlugOff:
+    pass
+
+
+@dataclass(frozen=True)
 class Unknown:
     pass
 
 
-Intent = Ack | Snooze | QueryNext | QueryToday | QueryTime | QueryDate | Unknown
+Intent = (
+    Ack | Snooze | QueryNext | QueryToday | QueryTime | QueryDate
+    | PlugOn | PlugOff | Unknown
+)
 
 _NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
@@ -67,6 +80,12 @@ _TIME_WORDS = ("what time", "the time", "time is it", "current time")
 _DATE_WORDS = ("what day", "what date", "the date", "today's date", "what's the date")
 _TODAY_WORDS = ("today", "rest of my day", "rest of the day", "my day")
 _NEXT_WORDS = ("next", "coming up", "after this", "upcoming")
+
+# A plug command needs BOTH a device noun and an on/off signal, so a bare
+# "off" or "on" never fires one. "off" is checked before "on".
+_PLUG_WORDS = ("plug", "charger", "charge", "outlet", "socket")
+_PLUG_OFF = ("off", "shut", "stop")
+_PLUG_ON = ("on", "start", "enable")
 
 
 def _normalize(text: str) -> str:
@@ -100,6 +119,11 @@ def parse(transcript: str) -> Intent:
     if not text:
         return Unknown()
 
+    if _has_any(text, _PLUG_WORDS):
+        if _has_any(text, _PLUG_OFF):
+            return PlugOff()
+        if _has_any(text, _PLUG_ON):
+            return PlugOn()
     if _has_any(text, _SNOOZE_WORDS):
         return Snooze(_extract_minutes(text))
     if _has_any(text, _TIME_WORDS):
