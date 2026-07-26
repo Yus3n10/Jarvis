@@ -116,7 +116,10 @@ def create_app(store: Store, config: Config, mouth=None) -> FastAPI:
         try:
             while True:
                 await socket.send_json(_state_payload(store, datetime.now(UTC), config, mouth))
-                await asyncio.sleep(1)
+                # Fast cadence so the orb reacts to speech promptly (the mouth
+                # flips on/off in well under a second). The payload is small and
+                # there is only ever the one kiosk client.
+                await asyncio.sleep(0.2)
         except WebSocketDisconnect:
             pass
 
