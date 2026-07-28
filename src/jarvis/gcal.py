@@ -65,9 +65,15 @@ def fetch_events(
     service,
     calendar_id: str,
     now: datetime,
-    horizon_hours: int = 48,
+    horizon_hours: int = 168,  # a week ahead, so the dashboard + "what's on X" see it
 ) -> list[Event]:
-    """Pull upcoming events. Raises on network failure; the caller decides."""
+    """Pull upcoming events. Raises on network failure; the caller decides.
+
+    The window only bounds what is *fetched* and shown; it does not make events
+    announce early -- the scheduler still speaks each one only at its reminder
+    time (is_due gates on due_utc), so a wider window just means Jarvis knows
+    about the week ahead, not that it talks about it sooner.
+    """
     result = (
         service.events()
         .list(
