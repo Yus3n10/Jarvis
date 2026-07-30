@@ -137,3 +137,60 @@ def test_plug_unreachable_is_reported():
 def test_plug_command_without_a_plug_is_graceful():
     out = handle("turn on the plug", NOW, FakeStore(), FakeConversation(), None)
     assert out == "The plug isn't set up."
+
+
+class FakePower:
+    def __init__(self, awaiting=False):
+        self._awaiting = awaiting
+        self.sleeping = False
+        self.confirmed = False
+        self.cancelled = False
+        self.requested = False
+
+    def awaiting_confirmation(self, now):
+        return self._awaiting
+
+    def confirm(self):
+        self.confirmed = True
+        return "Shutting down. Goodbye."
+
+    def cancel(self):
+        self.cancelled = True
+        self._awaiting = False
+
+    def request_shutdown(self, now):
+        self.requested = True
+        return "Say yes to confirm."
+
+    def sleep(self):
+        self.sleeping = True
+        return "Resting."
+
+    def wake(self):
+        self.sleeping = False
+        return "I'm back."
+
+
+def test_shutdown_only_asks_first():
+    p = FakePower()
+    out = handle("shut down", NOW, FakeStore(), FakeConversation(), None, p)
+    assert p.requested and not p.confirmed and "confirm" in out.lower()
+
+
+def test_yes_while_awaiting_confirms_shutdown():
+    p = FakePower(awaiting=True)
+    out = handle("yes", NOW, FakeStore(), FakeConversation(), None, p)
+    assert p.confirmed and out == "Shutting down. Goodbye."
+
+
+def test_non_yes_while_awaiting_cancels_then_handles_normally():
+    p = FakePower(awaiting=True)
+    out = handle("what time is it", NOW, FakeStore(), FakeConversation(), None, p)
+    assert p.cancelled and not p.confirmed
+    assert out != "Shutting down. Goodbye."  # it answered the time instead
+
+
+def test_sleep_and_wake_route_to_power():
+    p = FakePower()
+    assert handle("go to sleep", NOW, FakeStore(), FakeConversation(), None, p) == "Resting."
+    assert handle("wake up", NOW, FakeStore(), FakeConversation(), None, p) == "I'm back."

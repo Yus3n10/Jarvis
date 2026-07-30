@@ -53,13 +53,28 @@ class PlugOff:
 
 
 @dataclass(frozen=True)
+class Shutdown:
+    pass
+
+
+@dataclass(frozen=True)
+class Sleep:
+    pass
+
+
+@dataclass(frozen=True)
+class Wake:
+    pass
+
+
+@dataclass(frozen=True)
 class Unknown:
     pass
 
 
 Intent = (
     Ack | Snooze | QueryNext | QueryToday | QueryTime | QueryDate
-    | PlugOn | PlugOff | Unknown
+    | PlugOn | PlugOff | Shutdown | Sleep | Wake | Unknown
 )
 
 _NUMBER_WORDS = {
@@ -86,6 +101,28 @@ _NEXT_WORDS = ("next", "coming up", "after this", "upcoming")
 _PLUG_WORDS = ("plug", "charger", "charge", "outlet", "socket")
 _PLUG_OFF = ("off", "shut", "stop")
 _PLUG_ON = ("on", "start", "enable")
+
+# Full power-off (confirmed elsewhere). Distinct from plug on/off (which need a
+# plug noun and are matched first), so "shut down"/"power off the pi" never
+# collides with "turn off the plug".
+_SHUTDOWN_WORDS = (
+    "shut down", "shutdown", "power off", "power down",
+    "turn off the pi", "turn yourself off", "shut yourself down",
+)
+_SLEEP_WORDS = (
+    "go to sleep", "take a rest", "take a nap", "get some rest", "have a rest",
+    "sleep mode", "rest mode", "go to bed", "go rest",
+)
+_WAKE_WORDS = ("wake up", "come back", "i'm back", "im back", "resume", "wake yourself")
+
+_CONFIRM_WORDS = (
+    "yes", "yeah", "yep", "confirm", "do it", "sure", "go ahead", "affirmative", "proceed",
+)
+
+
+def is_affirmation(text: str) -> bool:
+    """True if the text is a clear 'yes' -- used to confirm a guarded action."""
+    return _has_any(_normalize(text), _CONFIRM_WORDS)
 
 
 def _normalize(text: str) -> str:
@@ -124,6 +161,12 @@ def parse(transcript: str) -> Intent:
             return PlugOff()
         if _has_any(text, _PLUG_ON):
             return PlugOn()
+    if _has_any(text, _SHUTDOWN_WORDS):
+        return Shutdown()
+    if _has_any(text, _WAKE_WORDS):
+        return Wake()
+    if _has_any(text, _SLEEP_WORDS):
+        return Sleep()
     if _has_any(text, _SNOOZE_WORDS):
         return Snooze(_extract_minutes(text))
     if _has_any(text, _TIME_WORDS):

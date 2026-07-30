@@ -9,10 +9,48 @@ from jarvis.intent import (
     QueryNext,
     QueryTime,
     QueryToday,
+    Shutdown,
+    Sleep,
     Snooze,
-    Unknown,
+    Wake,
+    is_affirmation,
     parse,
 )
+
+
+@pytest.mark.parametrize("text", [
+    "shut down", "shutdown", "power off", "power down", "turn off the pi",
+])
+def test_shutdown(text):
+    assert isinstance(parse(text), Shutdown)
+
+
+@pytest.mark.parametrize("text", [
+    "go to sleep", "take a rest", "take a nap", "sleep mode", "go to bed",
+])
+def test_sleep(text):
+    assert isinstance(parse(text), Sleep)
+
+
+@pytest.mark.parametrize("text", ["wake up", "come back", "resume", "im back"])
+def test_wake(text):
+    assert isinstance(parse(text), Wake)
+
+
+@pytest.mark.parametrize("text", ["yes", "yeah", "confirm", "do it", "sure", "go ahead"])
+def test_affirmation_true(text):
+    assert is_affirmation(text)
+
+
+@pytest.mark.parametrize("text", ["no", "nope", "what time is it", ""])
+def test_affirmation_false(text):
+    assert not is_affirmation(text)
+
+
+def test_turn_off_the_plug_still_beats_shutdown():
+    # "turn off" appears in both, but the plug needs a plug noun and is matched
+    # first, so a plug command never triggers a shutdown.
+    assert isinstance(parse("turn off the plug"), PlugOff)
 
 
 @pytest.mark.parametrize("text", [

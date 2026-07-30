@@ -25,7 +25,11 @@ from jarvis.intent import (
     QueryNext,
     QueryTime,
     QueryToday,
+    Shutdown,
+    Sleep,
     Snooze,
+    Wake,
+    is_affirmation,
     parse,
 )
 
@@ -59,14 +63,27 @@ def _needs_ack_ids(store) -> set[str]:
     }
 
 
-def handle(text: str, now: datetime, store, conversation, plug=None) -> str:
+def handle(text: str, now: datetime, store, conversation, plug=None, power=None) -> str:
     """Route a transcript to a spoken reply.
 
     Commands act locally and deterministically; only Unknown reaches conversation.
-    Pure with respect to its injected store/conversation/plug -- testable without
-    hardware. plug may be None (plug control not configured).
+    Pure with respect to its injected store/conversation/plug/power -- testable
+    without hardware. plug/power may be None (that capability not configured).
     """
+    # A pending shutdown intercepts the NEXT utterance: only "yes" powers off;
+    # anything else cancels and is then handled normally.
+    if power is not None and power.awaiting_confirmation(now):
+        if is_affirmation(text):
+            return power.confirm()
+        power.cancel()
+
     intent = parse(text)
+    if isinstance(intent, Shutdown):
+        return power.request_shutdown(now) if power else "I can't shut down right now."
+    if isinstance(intent, Sleep):
+        return power.sleep() if power else "I can't rest right now."
+    if isinstance(intent, Wake):
+        return power.wake() if power else "I'm here."
     if isinstance(intent, PlugOn):
         if plug is None or not plug.enabled:
             return "The plug isn't set up."
@@ -115,6 +132,7 @@ class Ears:
         conversation,
         mouth,
         plug=None,
+        power=None,
         wake_name: str = "hey_jarvis",
         device_name: str = "pulse",
         threshold: float = 0.5,
@@ -127,6 +145,7 @@ class Ears:
         self._conv = conversation
         self._mouth = mouth
         self._plug = plug
+        self._power = power
         self._wake_name = wake_name
         self._device = device_name
         self._threshold = threshold
@@ -182,7 +201,9 @@ class Ears:
                     # instead of talking over the silence.
                     self._voice.play_wav(_PING_WAV)
                     text = self._trans.transcribe(_CMD_WAV)
-                    reply = handle(text, datetime.now(UTC), self._store, self._conv, self._plug)
+                    reply = handle(
+                        text, datetime.now(UTC), self._store, self._conv, self._plug, self._power
+                    )
                     log.info("ears: heard %r -> %r", text, reply)
                     self._voice.speak(reply)
                     self._drain(stream, chunk)

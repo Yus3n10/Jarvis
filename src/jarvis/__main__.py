@@ -13,6 +13,7 @@ from jarvis.api import create_app, tick
 from jarvis.config import Config
 from jarvis.gcal import build_service, fetch_events
 from jarvis.mouth import Mouth
+from jarvis.power import Power
 from jarvis.store import Store
 from jarvis.voice import NullVoice, Voice
 
@@ -31,7 +32,7 @@ def _make_voice(mouth: Mouth):
     return Voice(piper, model, player, mouth), True
 
 
-def _start_ears(store: Store, voice, mouth: Mouth) -> None:
+def _start_ears(store: Store, voice, mouth: Mouth, power: Power) -> None:
     """Start the voice-input loop in a daemon thread. Additive: any failure here
     (missing voice deps, no mic, whisper load error) just disables voice input;
     the announcer and touchscreen ack are unaffected."""
@@ -49,7 +50,7 @@ def _start_ears(store: Store, voice, mouth: Mouth) -> None:
             device_id=os.environ.get("TUYA_DEVICE_ID"),
             region=os.environ.get("TUYA_API_REGION", "sg"),
         )
-        ears = Ears(store, voice, transcriber, conversation, mouth, plug)
+        ears = Ears(store, voice, transcriber, conversation, mouth, plug, power)
         threading.Thread(target=ears.run, name="ears", daemon=True).start()
         log.info(
             "voice input enabled (conversation %s, plug %s)",
@@ -104,9 +105,14 @@ async def _sync_loop(store: Store, config: Config) -> None:
         await asyncio.sleep(config.poll_seconds)
 
 
-async def _tick_loop(store: Store, config: Config, voice) -> None:
+async def _tick_loop(store: Store, config: Config, voice, power: Power) -> None:
     while True:
         try:
+            if power.sleeping:
+                # Resting: stay silent. Events that fall due now stay pending and
+                # get announced right after wake -- "here's what you missed".
+                await asyncio.sleep(10)
+                continue
             # tick() -> voice.speak() runs blocking subprocess.run calls (up
             # to 30s + 60s). Running it inline on the event loop would freeze
             # _sync_loop and the web server for that whole window - uvicorn
@@ -123,15 +129,18 @@ async def main() -> None:
     config = Config.load(ROOT / "config.toml")
     store = Store(ROOT / "jarvis.db")
     mouth = Mouth()
+    power = Power()
     voice, is_real = _make_voice(mouth)
     if is_real:
         _start_speaker_keeper()
-        _start_ears(store, voice, mouth)
+        _start_ears(store, voice, mouth, power)
 
     server = uvicorn.Server(
         uvicorn.Config(create_app(store, config, mouth), host="0.0.0.0", port=8000, log_level="warning")
     )
-    await asyncio.gather(_sync_loop(store, config), _tick_loop(store, config, voice), server.serve())
+    await asyncio.gather(
+        _sync_loop(store, config), _tick_loop(store, config, voice, power), server.serve()
+    )
 
 
 if __name__ == "__main__":
