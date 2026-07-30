@@ -12,6 +12,7 @@ from jarvis.intent import (
     Shutdown,
     Sleep,
     Snooze,
+    Unknown,
     Wake,
     is_affirmation,
     parse,
