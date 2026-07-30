@@ -16,7 +16,7 @@ import time
 import wave
 from datetime import UTC, datetime, timedelta
 
-from jarvis import phrasing
+from jarvis import faq, phrasing
 from jarvis.intent import (
     Ack,
     PlugOff,
@@ -97,7 +97,10 @@ def handle(text: str, now: datetime, store, conversation, plug=None) -> str:
         for i in ids:
             store.snooze(i, now + timedelta(minutes=intent.minutes))
         return f"Snoozed for {intent.minutes} minutes."
-    # Unknown
+    # Unknown -- a canned local answer first (zero tokens), then the LLM.
+    canned = faq.answer(text)
+    if canned is not None:
+        return canned
     if conversation.enabled:
         return conversation.reply(text, now, store.all_events())
     return "Sorry, I didn't catch that."
