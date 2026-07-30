@@ -23,18 +23,17 @@ _RULES: list[tuple[str, tuple[str, ...]]] = [
     (_CREATOR, (
         "who is your creator", "who created you", "who made you", "what made you",
         "what created you", "what are you for", "what is your purpose",
-        "what's your purpose", "why were you made", "why did ptheusen",
+        "whats your purpose", "why were you made", "why did ptheusen",
         "why did yusen", "why were you created",
     )),
     (_NAME, (
-        "what is your name", "what's your name", "whats your name",
-        "who are you", "what are you",
+        "what is your name", "whats your name", "who are you", "what are you",
     )),
 ]
 
 
 def _norm(text: str) -> str:
-    text = text.lower()
+    text = text.lower().replace("'", "").replace("’", "")  # what's -> whats
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
