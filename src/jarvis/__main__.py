@@ -168,7 +168,10 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = Config.load(ROOT / "config.toml")
     store = Store(ROOT / "jarvis.db")
-    mouth = Mouth()
+    # How far the speaker lags the bytes. Tunable because it is a property of
+    # the speaker and codec, not of this code: raise it if the orb leads the
+    # voice, lower it if the orb trails.
+    mouth = Mouth(latency_ms=int(os.environ.get("SPEECH_LATENCY_MS", "200")))
     power = Power()
     storage = Storage.from_env(os.environ.get("NAS_DRIVES"))
     voice, is_real = _make_voice(mouth)

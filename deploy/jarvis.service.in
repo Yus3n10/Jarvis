@@ -28,6 +28,8 @@ Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 # shuffle the moment a second USB disk is attached.
 # A wildcard mountpoint picks up whatever the desktop automounter has mounted,
 # so plugging in any USB disk gets it monitored and announced without an edit.
+# Bluetooth pipeline delay in ms: raise if the orb leads the voice, lower if it trails.
+Environment=SPEECH_LATENCY_MS=200
 Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-JMicron_Tech_DD564198838A1-0:0,usb:/media/stand/*
 # The optional Gemini conversation key. The leading '-' makes it optional: the
 # service starts fine without the file, and voice conversation simply stays off.
