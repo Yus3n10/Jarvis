@@ -3,8 +3,12 @@ import * as THREE from "three";
 
 // A glowing particle sphere -- Jarvis's "presence". Points sit on a sphere and
 // are pushed in and out by layered noise; the displacement and brightness scale
-// with `intensity` (0 = idle drift, 1 = speaking). intensity is read through a
-// ref every frame so the parent can drive it without re-rendering the canvas.
+// with the current speech loudness (0 = idle drift, 1 = peak of an utterance).
+//
+// The level arrives as a ref rather than a plain prop on purpose. It updates 20
+// times a second, and taking it as a prop would re-render the whole dashboard at
+// 20Hz to feed an animation that already runs its own requestAnimationFrame loop.
+// The parent writes ref.current; nothing re-renders; the loop reads it each frame.
 
 const COUNT = 6000;
 const RADIUS = 1;
@@ -26,10 +30,8 @@ function glowTexture(): THREE.Texture {
   return tex;
 }
 
-export default function Orb({ intensity }: { intensity: number }) {
+export default function Orb({ level }: { level: React.MutableRefObject<number> }) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const intensityRef = useRef(intensity);
-  intensityRef.current = intensity;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -109,8 +111,12 @@ export default function Orb({ intensity }: { intensity: number }) {
     const animate = () => {
       fit();
       const t = clock.getElapsedTime();
-      const target = Math.max(0, Math.min(1, intensityRef.current));
-      smooth += (target - smooth) * 0.12;
+      const target = Math.max(0, Math.min(1, level.current));
+      // Fast attack, slow release -- the same asymmetry a compressor uses, and
+      // for the same reason: syllable onsets are sharp and need to land on the
+      // frame they happen, while a symmetric filter slow enough to avoid
+      // flicker is far too slow to track speech and just sits at its average.
+      smooth += (target - smooth) * (target > smooth ? 0.35 : 0.1);
 
       // idle always has a little life; speaking adds punch.
       const amp = 0.04 + smooth * 0.22;

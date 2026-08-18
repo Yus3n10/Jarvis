@@ -21,6 +21,12 @@ Environment="AUDIO_PLAYER=aplay -q -"
 # service, so it depends on @USER@ being logged in to a graphical session for
 # that socket to exist; on a kiosk Pi with autologin, it does.
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+# Drives to watch, as name:mountpoint[:device], comma-separated. Unset disables
+# storage monitoring entirely. The device is what smartctl reads; omit it for
+# something with no SMART (a USB stick) and capacity still gets reported.
+# by-id rather than /dev/sda: sd* letters are assigned in spin-up order and
+# shuffle the moment a second USB disk is attached.
+Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-JMicron_Tech_DD564198838A1-0:0
 # The optional Gemini conversation key. The leading '-' makes it optional: the
 # service starts fine without the file, and voice conversation simply stays off.
 # The file is gitignored and never committed.

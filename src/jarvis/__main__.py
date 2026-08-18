@@ -14,6 +14,7 @@ from jarvis.config import Config
 from jarvis.gcal import build_service, fetch_events
 from jarvis.mouth import Mouth
 from jarvis.power import Power
+from jarvis.storage import Storage
 from jarvis.store import Store
 from jarvis.voice import NullVoice, Voice
 
@@ -32,7 +33,7 @@ def _make_voice(mouth: Mouth):
     return Voice(piper, model, player, mouth), True
 
 
-def _start_ears(store: Store, voice, mouth: Mouth, power: Power) -> None:
+def _start_ears(store: Store, voice, mouth: Mouth, power: Power, storage: Storage) -> None:
     """Start the voice-input loop in a daemon thread. Additive: any failure here
     (missing voice deps, no mic, whisper load error) just disables voice input;
     the announcer and touchscreen ack are unaffected."""
@@ -50,12 +51,13 @@ def _start_ears(store: Store, voice, mouth: Mouth, power: Power) -> None:
             device_id=os.environ.get("TUYA_DEVICE_ID"),
             region=os.environ.get("TUYA_API_REGION", "sg"),
         )
-        ears = Ears(store, voice, transcriber, conversation, mouth, plug, power)
+        ears = Ears(store, voice, transcriber, conversation, mouth, plug, power, storage)
         threading.Thread(target=ears.run, name="ears", daemon=True).start()
         log.info(
-            "voice input enabled (conversation %s, plug %s)",
+            "voice input enabled (conversation %s, plug %s, storage %s)",
             "on" if conversation.enabled else "off",
             "on" if plug.enabled else "off",
+            "on" if storage.enabled else "off",
         )
     except Exception:
         log.exception("could not start voice input; continuing without it")
@@ -124,22 +126,62 @@ async def _tick_loop(store: Store, config: Config, voice, power: Power) -> None:
         await asyncio.sleep(10)
 
 
+async def _storage_loop(storage: Storage, voice, power: Power, interval_seconds: int = 900) -> None:
+    """Watch the NAS drives and speak anything that got worse.
+
+    Warnings go out through the same voice as appointment announcements, because
+    a drive shedding sectors is the same class of failure as a sync that quietly
+    died: invisible until it costs you something.
+
+    Slow on purpose. Reading SMART wakes a sleeping disk, so a fast poll would
+    keep the drives spinning 24/7 and shorten their lives to improve their
+    monitoring, which is a poor trade.
+
+    While resting, the check is skipped entirely rather than run-and-muted, so
+    nothing gets marked as already-warned. Whatever is wrong gets announced on
+    the next pass after wake.
+    """
+    if not storage.enabled:
+        log.info("storage monitoring off (NAS_DRIVES unset)")
+        return
+    while True:
+        try:
+            if not power.sleeping:
+                _, warnings = await asyncio.to_thread(storage.check)
+                for text in warnings:
+                    log.warning("storage: %s", text)
+                    voice.speak(text)
+        except Exception:
+            # A disk that cannot be read must never take down the announcer.
+            log.exception("storage check failed")
+        await asyncio.sleep(interval_seconds)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = Config.load(ROOT / "config.toml")
     store = Store(ROOT / "jarvis.db")
     mouth = Mouth()
     power = Power()
+    storage = Storage.from_env(os.environ.get("NAS_DRIVES"))
     voice, is_real = _make_voice(mouth)
     if is_real:
         _start_speaker_keeper()
-        _start_ears(store, voice, mouth, power)
+        _start_ears(store, voice, mouth, power, storage)
 
     server = uvicorn.Server(
-        uvicorn.Config(create_app(store, config, mouth), host="0.0.0.0", port=8000, log_level="warning")
+        uvicorn.Config(
+            create_app(store, config, mouth, storage),
+            host="0.0.0.0",
+            port=8000,
+            log_level="warning",
+        )
     )
     await asyncio.gather(
-        _sync_loop(store, config), _tick_loop(store, config, voice, power), server.serve()
+        _sync_loop(store, config),
+        _tick_loop(store, config, voice, power),
+        _storage_loop(storage, voice, power),
+        server.serve(),
     )
 
 

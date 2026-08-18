@@ -68,13 +68,18 @@ class Wake:
 
 
 @dataclass(frozen=True)
+class QueryStorage:
+    pass
+
+
+@dataclass(frozen=True)
 class Unknown:
     pass
 
 
 Intent = (
     Ack | Snooze | QueryNext | QueryToday | QueryTime | QueryDate
-    | PlugOn | PlugOff | Shutdown | Sleep | Wake | Unknown
+    | PlugOn | PlugOff | Shutdown | Sleep | Wake | QueryStorage | Unknown
 )
 
 _NUMBER_WORDS = {
@@ -117,6 +122,15 @@ _WAKE_WORDS = ("wake up", "come back", "i'm back", "im back", "resume", "wake yo
 
 _CONFIRM_WORDS = (
     "yes", "yeah", "yep", "confirm", "do it", "sure", "go ahead", "affirmative", "proceed",
+)
+
+# One intent covers both halves of the question, because "how much room is left"
+# and "are the disks alright" get answered by the same sentence. Multi-word on
+# purpose: a bare "drive" or "space" would swallow ordinary conversation.
+_STORAGE_WORDS = (
+    "disk space", "drive space", "storage", "how much space", "space left",
+    "space is left", "hard drive", "hard drives", "drive health", "disk health",
+    "the drives", "how full", "nas",
 )
 
 
@@ -167,6 +181,10 @@ def parse(transcript: str) -> Intent:
         return Wake()
     if _has_any(text, _SLEEP_WORDS):
         return Sleep()
+    # After shutdown/sleep so "shut down the hard drive" still powers off, and
+    # before the query words so "how much space is left today" is a disk answer.
+    if _has_any(text, _STORAGE_WORDS):
+        return QueryStorage()
     if _has_any(text, _SNOOZE_WORDS):
         return Snooze(_extract_minutes(text))
     if _has_any(text, _TIME_WORDS):

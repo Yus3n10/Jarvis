@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from jarvis.config import Config
@@ -20,6 +21,11 @@ log = logging.getLogger(__name__)
 # number of minutes, so it scales with however often sync is actually meant
 # to run.
 _SYNC_STALE_POLL_MULTIPLIER = 3
+
+# 20Hz level pushes, full state every 20th (once a second). 20Hz comfortably
+# resolves syllable rate (4-8Hz); the browser eases between samples.
+_WS_TICK_SECONDS = 0.05
+_STATE_EVERY_N_TICKS = 20
 
 
 def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
@@ -54,7 +60,7 @@ def tick(now: datetime, store: Store, voice, config: Config) -> list[str]:
     return spoken
 
 
-def _state_payload(store: Store, now: datetime, config: Config, mouth=None) -> dict:
+def _state_payload(store: Store, now: datetime, config: Config, mouth=None, storage=None) -> dict:
     events = sorted(store.all_events(), key=lambda e: e.start_utc)
     anns = store.all_announcements()
     pending = {a.event_id for a in anns if a.state == "pending"}
@@ -67,13 +73,31 @@ def _state_payload(store: Store, now: datetime, config: Config, mouth=None) -> d
     sync_stale_after = timedelta(seconds=config.poll_seconds * _SYNC_STALE_POLL_MULTIPLIER)
     sync_stale = last_sync_ok is None or (now - last_sync_ok) > sync_stale_after
     return {
+        "type": "state",
         "now_utc": now.isoformat(),
         "heartbeat_utc": heartbeat.isoformat() if heartbeat else None,
         "last_sync_ok_utc": last_sync_ok.isoformat() if last_sync_ok else None,
         "stale": heartbeat is None or (now - heartbeat) > timedelta(minutes=2) or sync_stale,
-        # The orb reacts to this: True while Jarvis is speaking (the mouth lock
-        # is held). Absent mouth (tests, no audio) reads as not speaking.
+        # The orb reacts to these: `speaking` is the on/off gate, `level` is the
+        # loudness of what the listener is hearing right now. Absent mouth
+        # (tests, no audio) reads as silent.
         "speaking": bool(mouth is not None and mouth.busy),
+        "level": round(mouth.level, 3) if mouth is not None else 0.0,
+        # Cached by the storage loop, never polled here: this payload goes out
+        # at 5Hz and running smartctl at 5Hz would hold the disk awake forever.
+        "drives": [
+            {
+                "name": d.name,
+                "present": d.present,
+                "free_bytes": d.free_bytes,
+                "total_bytes": d.total_bytes,
+                "free_pct": round(d.free_pct, 1),
+                "pending": d.pending,
+                "reallocated": d.reallocated,
+                "failing": d.failing,
+            }
+            for d in (storage.last_status() if storage is not None else [])
+        ],
         "events": [
             {
                 "id": e.id,
@@ -93,12 +117,12 @@ def _state_payload(store: Store, now: datetime, config: Config, mouth=None) -> d
     }
 
 
-def create_app(store: Store, config: Config, mouth=None) -> FastAPI:
+def create_app(store: Store, config: Config, mouth=None, storage=None) -> FastAPI:
     app = FastAPI(title="Jarvis")
 
     @app.get("/api/state")
     def state() -> dict:
-        return _state_payload(store, datetime.now(UTC), config, mouth)
+        return _state_payload(store, datetime.now(UTC), config, mouth, storage)
 
     @app.post("/api/ack/{event_id}")
     def ack(event_id: str) -> dict:
@@ -110,16 +134,47 @@ def create_app(store: Store, config: Config, mouth=None) -> FastAPI:
         store.snooze(event_id, datetime.now(UTC) + timedelta(minutes=minutes))
         return {"ok": True}
 
+    @app.post("/api/kiosk/exit")
+    def kiosk_exit(request: Request) -> dict:
+        """Drop out of the kiosk to the desktop. Localhost only.
+
+        uvicorn binds 0.0.0.0 so the dashboard is reachable from the LAN, but
+        only the kiosk browser itself has any business closing the kiosk --
+        otherwise anyone on the network could blank the appliance's screen.
+        Getting back in is the 'Jarvis Kiosk' icon on the desktop.
+        """
+        host = request.client.host if request.client else ""
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(status_code=403, detail="kiosk control is localhost only")
+        # chromium runs as the same user as this service, so no sudo is needed.
+        subprocess.run(["pkill", "-f", "chromium"], check=False)
+        return {"ok": True}
+
     @app.websocket("/ws")
     async def ws(socket: WebSocket) -> None:
         await socket.accept()
         try:
+            ticks = 0
             while True:
-                await socket.send_json(_state_payload(store, datetime.now(UTC), config, mouth))
-                # Fast cadence so the orb reacts to speech promptly (the mouth
-                # flips on/off in well under a second). The payload is small and
-                # there is only ever the one kiosk client.
-                await asyncio.sleep(0.2)
+                # Two cadences on one socket. The full state costs two SQLite
+                # reads, and events do not change 20 times a second, so it goes
+                # out once a second. The orb needs `level` far more often than
+                # that, and level is a float read off the mouth -- no I/O. This
+                # is both smoother than the old 5Hz full-state push and cheaper.
+                if ticks % _STATE_EVERY_N_TICKS == 0:
+                    await socket.send_json(
+                        _state_payload(store, datetime.now(UTC), config, mouth, storage)
+                    )
+                else:
+                    await socket.send_json(
+                        {
+                            "type": "level",
+                            "level": round(mouth.level, 3) if mouth is not None else 0.0,
+                            "speaking": bool(mouth is not None and mouth.busy),
+                        }
+                    )
+                ticks += 1
+                await asyncio.sleep(_WS_TICK_SECONDS)
         except WebSocketDisconnect:
             pass
 

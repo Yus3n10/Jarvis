@@ -53,6 +53,46 @@ header { display: flex; align-items: flex-start; justify-content: space-between;
   padding: 5px 11px; border-radius: 8px;
 }
 
+/* Right-hand status rail: health badge, drive cards, kiosk exit. */
+.rail {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+  max-width: 260px;
+}
+
+.drive {
+  width: 100%;
+  display: flex; flex-direction: column; gap: 7px;
+  background: rgba(16, 24, 40, 0.62);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px; padding: 10px 13px;
+}
+.drive.failing { border-color: var(--urgent); box-shadow: 0 0 18px rgba(251, 113, 133, 0.22); }
+.drive.gone { border-color: var(--urgent); opacity: 0.75; }
+
+.drow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.dname { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; text-transform: capitalize; }
+.dfree { font-size: 13px; color: var(--dim); }
+
+.dbar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.09); overflow: hidden; }
+.dbar > div { height: 100%; background: var(--cyan); border-radius: 2px; }
+.drive.failing .dbar > div { background: var(--urgent); }
+
+.dwarn { font-size: 12px; font-weight: 700; color: var(--urgent); letter-spacing: 0.3px; }
+
+.exit {
+  pointer-events: auto; cursor: none;
+  font-size: 13px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 9px 14px; min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(16, 24, 40, 0.62);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  color: var(--dim);
+}
+.exit.armed { border-color: var(--urgent); color: var(--urgent); }
+.exit:active { transform: scale(0.97); }
+
 .center { flex: 1; display: flex; align-items: flex-start; justify-content: center; }
 .listening {
   margin-top: 7vh; color: var(--cyan);

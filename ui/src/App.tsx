@@ -10,12 +10,36 @@ type EventRow = {
   failed: boolean;
 };
 
+type DriveRow = {
+  name: string;
+  present: boolean;
+  free_bytes: number;
+  total_bytes: number;
+  free_pct: number;
+  pending: number | null;
+  reallocated: number | null;
+  failing: boolean;
+};
+
 type State = {
+  type: "state";
   now_utc: string;
   stale: boolean;
   speaking: boolean;
+  level: number;
   events: EventRow[];
+  drives: DriveRow[];
 };
+
+// The socket carries two message shapes: the full state once a second, and a
+// bare loudness level 20 times a second so the orb can move with the voice.
+type LevelMsg = { type: "level"; level: number; speaking: boolean };
+
+const GIB = 1024 ** 3;
+
+function gib(n: number) {
+  return Math.round(n / GIB);
+}
 
 const PHT = "Asia/Manila";
 
@@ -50,7 +74,12 @@ function countdown(startIso: string, nowIso: string) {
 export default function App() {
   const [state, setState] = useState<State | null>(null);
   const [connected, setConnected] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [armedExit, setArmedExit] = useState(false);
   const lastMessageAtRef = useRef<number | null>(null);
+  // Written 20x/sec from the socket and read by the orb's own animation loop.
+  // Deliberately not React state: see the note in Orb.tsx.
+  const levelRef = useRef(0);
   // Ticking state has no meaning of its own -- it exists only to force a
   // re-render every second so a silent (dead) socket still gets re-checked
   // for staleness even though no message arrives to trigger one.
@@ -76,18 +105,49 @@ export default function App() {
           failed: false,
         },
       ];
+      const drives: DriveRow[] = [
+        {
+          name: "movies",
+          present: true,
+          free_bytes: 197 * GIB,
+          total_bytes: 298 * GIB,
+          free_pct: 66,
+          pending: 784,
+          reallocated: 8216,
+          failing: true,
+        },
+      ];
       setConnected(true);
-      let speaking = false;
+      let talking = false;
       const push = () => {
         lastMessageAtRef.current = Date.now();
-        setState({ now_utc: new Date().toISOString(), stale: false, speaking, events });
+        setState({
+          type: "state",
+          now_utc: new Date().toISOString(),
+          stale: false,
+          speaking: talking,
+          level: 0,
+          events,
+          drives,
+        });
       };
       push();
+      // Fake a syllable envelope so the orb can be previewed without audio.
+      const anim = setInterval(() => {
+        const t = Date.now() / 1000;
+        levelRef.current = talking
+          ? Math.max(0, Math.sin(t * 9) * 0.5 + Math.sin(t * 5.5) * 0.4 + 0.15)
+          : 0;
+      }, 50);
       const iv = setInterval(() => {
-        speaking = !speaking;
+        talking = !talking;
+        setSpeaking(talking);
         push();
       }, 2500);
-      return () => clearInterval(iv);
+      return () => {
+        clearInterval(iv);
+        clearInterval(anim);
+      };
     }
 
     let cancelled = false;
@@ -109,7 +169,12 @@ export default function App() {
       socket.onmessage = (e) => {
         if (cancelled) return;
         lastMessageAtRef.current = Date.now();
-        setState(JSON.parse(e.data));
+        const msg: State | LevelMsg = JSON.parse(e.data);
+        levelRef.current = msg.level ?? 0;
+        // Passing the same value makes React bail out, so the 19-in-20 level
+        // messages that change nothing cost no re-render at all.
+        setSpeaking(msg.speaking);
+        if (msg.type !== "level") setState(msg);
       };
 
       socket.onclose = () => {
@@ -169,9 +234,23 @@ export default function App() {
 
   const next = state.events[0];
 
+  // Two taps to leave, and the arm expires: a stray touch on a wall-mounted
+  // panel must not drop the appliance to a desktop nobody is standing at.
+  const exitKiosk = () => {
+    if (!armedExit) {
+      setArmedExit(true);
+      setTimeout(() => setArmedExit(false), 5000);
+      return;
+    }
+    setArmedExit(false);
+    fetch("/api/kiosk/exit", { method: "POST" }).catch((err) =>
+      console.error("kiosk exit failed", err),
+    );
+  };
+
   return (
-    <div className={`screen${state.speaking ? " speaking" : ""}`}>
-      <Orb intensity={state.speaking ? 1 : 0} />
+    <div className={`screen${speaking ? " speaking" : ""}`}>
+      <Orb level={levelRef} />
 
       <div className="hud">
         <header>
@@ -179,11 +258,49 @@ export default function App() {
             <div className="clock">{clockTime(state.now_utc)}</div>
             <div className="date">{today}</div>
           </div>
-          {isStale && <div className="stale">NOT UPDATING</div>}
+
+          <div className="rail">
+            {isStale && <div className="stale">NOT UPDATING</div>}
+
+            {state.drives?.map((d) => (
+              <div
+                key={d.name}
+                className={
+                  "drive" + (!d.present ? " gone" : d.failing ? " failing" : "")
+                }
+              >
+                <div className="drow">
+                  <span className="dname">{d.name}</span>
+                  <span className="dfree">
+                    {d.present ? `${gib(d.free_bytes)} GB free` : "disconnected"}
+                  </span>
+                </div>
+                {d.present && (
+                  <div className="dbar">
+                    <div style={{ width: `${Math.max(0, 100 - d.free_pct)}%` }} />
+                  </div>
+                )}
+                {d.present && d.failing && (
+                  <span className="dwarn">
+                    {d.pending
+                      ? `${d.pending} unreadable sectors`
+                      : `${d.reallocated} remapped sectors`}
+                  </span>
+                )}
+              </div>
+            ))}
+
+            <button
+              className={"exit" + (armedExit ? " armed" : "")}
+              onClick={exitKiosk}
+            >
+              {armedExit ? "Tap again to confirm" : "Exit kiosk"}
+            </button>
+          </div>
         </header>
 
         <div className="center">
-          {state.speaking && <div className="listening">Jarvis is speaking…</div>}
+          {speaking && <div className="listening">Jarvis is speaking…</div>}
         </div>
 
         <footer className="dock">
