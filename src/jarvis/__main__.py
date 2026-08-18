@@ -126,31 +126,38 @@ async def _tick_loop(store: Store, config: Config, voice, power: Power) -> None:
         await asyncio.sleep(10)
 
 
-async def _storage_loop(storage: Storage, voice, power: Power, interval_seconds: int = 900) -> None:
-    """Watch the NAS drives and speak anything that got worse.
+async def _storage_loop(storage: Storage, voice, power: Power, interval_seconds: int = 60) -> None:
+    """Watch the NAS drives and speak drive news, on events rather than on a timer.
 
-    Warnings go out through the same voice as appointment announcements, because
-    a drive shedding sectors is the same class of failure as a sync that quietly
-    died: invisible until it costs you something.
+    A full check (SMART included) runs at startup and then only when the set of
+    mounted drives changes: one unplugged, one plugged back in, or a new one
+    appearing. It deliberately does NOT run periodically. A dying disk grows its
+    pending-sector count on every read, so a timer would re-announce the same bad
+    news every cycle, and a warning you hear every fifteen minutes is one you
+    stop hearing at all.
 
-    Slow on purpose. Reading SMART wakes a sleeping disk, so a fast poll would
-    keep the drives spinning 24/7 and shorten their lives to improve their
-    monitoring, which is a poor trade.
+    In between, a cheap capacity-only refresh keeps the dashboard honest without
+    reading SMART, so a spun-down drive is left asleep.
 
-    While resting, the check is skipped entirely rather than run-and-muted, so
-    nothing gets marked as already-warned. Whatever is wrong gets announced on
-    the next pass after wake.
+    While resting, both are skipped rather than run-and-muted, so nothing gets
+    marked as already-announced and anything found is spoken after wake.
     """
     if not storage.enabled:
         log.info("storage monitoring off (NAS_DRIVES unset)")
         return
+    known: frozenset[str] | None = None
     while True:
         try:
             if not power.sleeping:
-                _, warnings = await asyncio.to_thread(storage.check)
-                for text in warnings:
-                    log.warning("storage: %s", text)
-                    voice.speak(text)
+                present = await asyncio.to_thread(storage.presence)
+                if known is None or present != known:
+                    _, warnings = await asyncio.to_thread(storage.check)
+                    for text in warnings:
+                        log.warning("storage: %s", text)
+                        voice.speak(text)
+                else:
+                    await asyncio.to_thread(storage.refresh)
+                known = present
         except Exception:
             # A disk that cannot be read must never take down the announcer.
             log.exception("storage check failed")

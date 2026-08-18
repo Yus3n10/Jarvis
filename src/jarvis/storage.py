@@ -23,6 +23,7 @@ and subprocess, and every failure path in it returns empty rather than raising:
 a drive that cannot be read must never take down the announcer.
 """
 
+import glob
 import logging
 import os
 import re
@@ -186,6 +187,24 @@ def describe(statuses: list[DriveStatus]) -> str:
     return "Right now, " + "; ".join(parts) + "."
 
 
+def _device_for(mountpoint: str) -> str:
+    """The block device mounted at this path, per /proc/mounts. "" if unknown.
+
+    Needed for wildcard mountpoints, where the device is not known until the
+    drive is actually plugged in and mounted by the desktop automounter.
+    """
+    try:
+        with open("/proc/mounts", encoding="utf-8") as mounts:
+            for line in mounts:
+                parts = line.split()
+                # /proc/mounts escapes spaces in paths as \040.
+                if len(parts) >= 2 and parts[1].replace("\\040", " ") == mountpoint:
+                    return parts[0]
+    except OSError:
+        pass
+    return ""
+
+
 def _default_statvfs(path: str):
     """os.statvfs is POSIX-only. Looked up at call time rather than bound at
     construction, so this module still imports and constructs on the Windows
@@ -225,15 +244,23 @@ class Storage:
         read_smart=_read_smart,
         statvfs=None,
         ismount=None,
+        expand=None,
+        device_for=_device_for,
         low_space_pct: float = _LOW_SPACE_PCT,
     ) -> None:
         self._drives = list(drives)
         self._read_smart = read_smart
         self._statvfs = statvfs or _default_statvfs  # injectable for tests
         self._ismount = ismount or os.path.ismount
+        self._expand = expand or glob.glob
+        self._device_for = device_for
         self._low = low_space_pct
         self._prev: dict[str, DriveStatus] = {}
         self._last: list[DriveStatus] = []
+        # SMART values are re-read only on a full check, and remembered in
+        # between so the dashboard keeps showing them without waking the disk.
+        self._smart: dict[str, dict[int, int]] = {}
+        self._seen_once = False
 
     @classmethod
     def from_env(cls, spec: str | None, **kw) -> "Storage":
@@ -247,26 +274,83 @@ class Storage:
         return bool(self._drives)
 
     def last_status(self) -> list[DriveStatus]:
-        """Cached, no I/O. This is what the 5Hz dashboard payload reads."""
+        """Cached, no I/O. This is what the 20Hz dashboard payload reads."""
         return self._last
 
-    def poll(self) -> list[DriveStatus]:
-        self._last = [self._status(d) for d in self._drives]
+    def presence(self) -> frozenset[str]:
+        """Names currently mounted. Deliberately cheap: no statvfs, no SMART, so
+        this can be called often without touching (or waking) a disk. It is the
+        trigger for a full check."""
+        return frozenset(d.name for d in self._resolve() if self._ismount(d.mountpoint))
+
+    def refresh(self) -> list[DriveStatus]:
+        """Update capacity for the dashboard without re-reading SMART. Silent."""
+        return self.poll(read_smart=False)
+
+    def poll(self, read_smart: bool = True) -> list[DriveStatus]:
+        self._last = [self._status(d, read_smart) for d in self._resolve()]
         return self._last
 
     def check(self) -> tuple[list[DriveStatus], list[str]]:
-        """Poll, then diff against the previous poll. Returns (statuses, warnings)."""
-        statuses = self.poll()
+        """Full poll including SMART, diffed against the last one.
+
+        Called only when something actually changed (first run after boot, or a
+        drive appearing or vanishing), never on a timer. A failing disk grows its
+        pending-sector count continuously, so a periodic check would re-announce
+        the same bad news every cycle until it became noise.
+        """
+        statuses = self.poll(read_smart=True)
         warnings: list[str] = []
         for status in statuses:
-            warnings.extend(assess(self._prev.get(status.name), status, self._low))
+            previous = self._prev.get(status.name)
+            # A drive that was never in the config until now, discovered after
+            # startup, means someone just plugged something in.
+            if previous is None and self._seen_once and status.present:
+                warnings.append(
+                    f"A drive named {status.name} is connected, "
+                    f"{_gib(status.free_bytes)} gigabytes free."
+                )
+            warnings.extend(assess(previous, status, self._low))
             self._prev[status.name] = status
+
+        # A globbed mountpoint does not go present=False when it is unplugged,
+        # it stops existing altogether, so that departure is caught here.
+        live = {s.name for s in statuses}
+        for name in [n for n in self._prev if n not in live]:
+            warnings.append(f"The {name} drive has disconnected.")
+            del self._prev[name]
+            self._smart.pop(name, None)
+
+        self._seen_once = True
         return statuses, warnings
 
     def describe(self) -> str:
         return describe(self._last or self.poll())
 
-    def _status(self, drive: Drive) -> DriveStatus:
+    def _resolve(self) -> list[Drive]:
+        """Expand any wildcard mountpoints into the drives actually mounted now.
+
+        `usb:/media/stand/*` picks up whatever the desktop automounter has
+        mounted, so a freshly plugged disk is monitored without editing config.
+        Each match is named after its own directory; the configured name is only
+        a placeholder for the pattern.
+        """
+        out: list[Drive] = []
+        for drive in self._drives:
+            if "*" not in drive.mountpoint:
+                out.append(drive)
+                continue
+            for path in sorted(self._expand(drive.mountpoint)):
+                out.append(
+                    Drive(
+                        name=os.path.basename(path.rstrip("/")) or drive.name,
+                        mountpoint=path,
+                        device=self._device_for(path),
+                    )
+                )
+        return out
+
+    def _status(self, drive: Drive, read_smart: bool) -> DriveStatus:
         present, total, free = False, 0, 0
         try:
             if self._ismount(drive.mountpoint):
@@ -279,7 +363,12 @@ class Storage:
             # than simply absent, which reads as "not present" and is correct.
             log.warning("could not stat %s: %s", drive.mountpoint, exc)
 
-        attrs = parse_attributes(self._read_smart(drive.device)) if present and drive.device else {}
+        if not present:
+            self._smart.pop(drive.name, None)  # a re-plugged drive gets re-read
+        elif drive.device and (read_smart or drive.name not in self._smart):
+            self._smart[drive.name] = parse_attributes(self._read_smart(drive.device))
+
+        attrs = self._smart.get(drive.name, {})
         return DriveStatus(
             name=drive.name,
             present=present,

@@ -26,7 +26,9 @@ Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 # something with no SMART (a USB stick) and capacity still gets reported.
 # by-id rather than /dev/sda: sd* letters are assigned in spin-up order and
 # shuffle the moment a second USB disk is attached.
-Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-JMicron_Tech_DD564198838A1-0:0
+# A wildcard mountpoint picks up whatever the desktop automounter has mounted,
+# so plugging in any USB disk gets it monitored and announced without an edit.
+Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-JMicron_Tech_DD564198838A1-0:0,usb:/media/stand/*
 # The optional Gemini conversation key. The leading '-' makes it optional: the
 # service starts fine without the file, and voice conversation simply stays off.
 # The file is gitignored and never committed.

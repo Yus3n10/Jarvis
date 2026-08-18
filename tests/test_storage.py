@@ -277,3 +277,132 @@ def test_storage_question_without_storage_configured():
 def test_storage_absent_does_not_break_other_commands():
     reply = handle("what time is it", NOW, FakeStore(), FakeConversation())
     assert "It's" in reply
+
+
+# --- event-driven checking, not periodic -------------------------------------
+
+
+def test_repeated_checks_do_not_renag_about_a_degrading_drive():
+    """The point of the change: pending sectors climb on a dying disk, so a
+    periodic check would re-announce forever. Only presence changes trigger one."""
+    smart = [SMART_REAL]
+
+    def worsening(_dev):
+        return smart[0]
+
+    s = Storage(
+        [Drive("movies", "/srv/nas/movies", "/dev/sda")],
+        read_smart=worsening,
+        statvfs=lambda p: FakeStat(299, 197),
+        ismount=lambda p: True,
+    )
+    _, first = s.check()
+    assert any("784" in w for w in first)
+    # The drive gets worse. A check would speak again, which is why the loop
+    # only calls check() when presence changes.
+    smart[0] = SMART_REAL.replace("784", "1200")
+    _, second = s.check()
+    assert any("1200" in w for w in second)  # check() itself still reports
+    # ...but presence has not changed, so the loop would never have called it.
+    assert s.presence() == frozenset({"movies"})
+
+
+def test_refresh_updates_capacity_without_touching_smart():
+    calls = []
+    free = [197]
+    s = Storage(
+        [Drive("movies", "/srv/nas/movies", "/dev/sda")],
+        read_smart=lambda dev: calls.append(dev) or SMART_REAL,
+        statvfs=lambda p: FakeStat(299, free[0]),
+        ismount=lambda p: True,
+    )
+    s.check()
+    assert len(calls) == 1
+    free[0] = 150
+    status = s.refresh()[0]
+    assert len(calls) == 1  # SMART not re-read, so the disk is left alone
+    assert status.free_bytes == 150 * GIB  # capacity is current
+    assert status.pending == 784  # remembered, so the dashboard keeps showing it
+
+
+def test_presence_is_cheap():
+    """presence() runs often, so it must not read SMART or stat the filesystem."""
+    smart_calls, stat_calls = [], []
+    s = Storage(
+        [Drive("movies", "/srv/nas/movies", "/dev/sda")],
+        read_smart=lambda dev: smart_calls.append(dev) or "",
+        statvfs=lambda p: stat_calls.append(p) or FakeStat(299, 197),
+        ismount=lambda p: True,
+    )
+    s.presence()
+    assert smart_calls == [] and stat_calls == []
+
+
+# --- wildcard mountpoints: "a new drive has been plugged" --------------------
+
+
+def _usb(mounted, devices=None):
+    devices = devices or {}
+    return Storage(
+        [Drive("usb", "/media/stand/*")],
+        read_smart=lambda dev: "",
+        statvfs=lambda p: FakeStat(80, 60),
+        ismount=lambda p: True,
+        expand=lambda pattern: list(mounted),
+        device_for=lambda p: devices.get(p, ""),
+    )
+
+
+def test_wildcard_names_each_drive_after_its_own_mountpoint():
+    s = _usb(["/media/stand/Personal", "/media/stand/SANDISK"])
+    assert {d.name for d in s.poll()} == {"Personal", "SANDISK"}
+
+
+def test_a_new_drive_after_startup_is_announced():
+    mounted = ["/media/stand/Personal"]
+    s = Storage(
+        [Drive("usb", "/media/stand/*")],
+        read_smart=lambda dev: "",
+        statvfs=lambda p: FakeStat(80, 60),
+        ismount=lambda p: True,
+        expand=lambda pattern: list(mounted),
+        device_for=lambda p: "",
+    )
+    _, startup = s.check()
+    assert startup == []  # a healthy drive present at boot is not news
+    mounted.append("/media/stand/SANDISK")
+    _, after = s.check()
+    assert any("SANDISK" in w and "connected" in w for w in after)
+
+
+def test_a_vanished_wildcard_drive_is_announced():
+    mounted = ["/media/stand/Personal", "/media/stand/SANDISK"]
+    s = Storage(
+        [Drive("usb", "/media/stand/*")],
+        read_smart=lambda dev: "",
+        statvfs=lambda p: FakeStat(80, 60),
+        ismount=lambda p: True,
+        expand=lambda pattern: list(mounted),
+        device_for=lambda p: "",
+    )
+    s.check()
+    mounted.remove("/media/stand/SANDISK")
+    _, after = s.check()
+    assert any("SANDISK" in w and "disconnected" in w for w in after)
+
+
+def test_replugged_drive_rereads_smart():
+    """A different disk in the same enclosure must not inherit the old numbers."""
+    present = [True]
+    s = Storage(
+        [Drive("movies", "/srv/nas/movies", "/dev/sda")],
+        read_smart=lambda dev: SMART_REAL if present[0] else "",
+        statvfs=lambda p: FakeStat(299, 197),
+        ismount=lambda p: present[0],
+    )
+    assert s.check()[0][0].pending == 784
+    present[0] = False
+    s.check()
+    present[0] = True
+    s._read_smart = lambda dev: SMART_HEALTHY
+    assert s.check()[0][0].pending == 0  # the new disk's numbers, not the old
