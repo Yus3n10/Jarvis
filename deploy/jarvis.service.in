@@ -21,16 +21,25 @@ Environment="AUDIO_PLAYER=aplay -q -"
 # service, so it depends on @USER@ being logged in to a graphical session for
 # that socket to exist; on a kiosk Pi with autologin, it does.
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
-# Drives to watch, as name:mountpoint[:device], comma-separated. Unset disables
-# storage monitoring entirely. The device is what smartctl reads; omit it for
-# something with no SMART (a USB stick) and capacity still gets reported.
-# by-id rather than /dev/sda: sd* letters are assigned in spin-up order and
-# shuffle the moment a second USB disk is attached.
-# A wildcard mountpoint picks up whatever the desktop automounter has mounted,
-# so plugging in any USB disk gets it monitored and announced without an edit.
-# Bluetooth pipeline delay in ms: raise if the orb leads the voice, lower if it trails.
+# Optional drive monitoring: which drives to watch, as name:mountpoint[:device],
+# comma-separated. Empty (the default below) disables it entirely.
+#
+# The device is what smartctl reads. Omit it for something with no SMART, such as
+# a USB stick, and free space is still reported. Prefer a /dev/disk/by-id path
+# over /dev/sdX: sd letters are handed out in spin-up order and shuffle the
+# moment a second USB disk is attached. Find yours with `ls -l /dev/disk/by-id/`.
+#
+# A wildcard mountpoint picks up whatever the desktop automounter has mounted, so
+# a disk plugged in later is monitored without editing this file.
+#
+#   Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-Example_1234-0:0
+#   Environment=NAS_DRIVES=movies:/srv/nas/movies,usb:/media/@USER@/*
+#
+Environment=NAS_DRIVES=
+# How far the speaker lags the audio, in milliseconds, used to line the dashboard
+# orb up with the voice. Raise it if the orb leads, lower it if the orb trails.
+# Bluetooth is typically 150-250; a wired or USB speaker is closer to 0.
 Environment=SPEECH_LATENCY_MS=200
-Environment=NAS_DRIVES=movies:/srv/nas/movies:/dev/disk/by-id/usb-JMicron_Tech_DD564198838A1-0:0,usb:/media/stand/*
 # The optional Gemini conversation key. The leading '-' makes it optional: the
 # service starts fine without the file, and voice conversation simply stays off.
 # The file is gitignored and never committed.

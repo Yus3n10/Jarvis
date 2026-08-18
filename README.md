@@ -143,6 +143,14 @@ this case — so a stalled or never-succeeded sync now shows `NOT UPDATING`
 even if everything else looks fine, instead of quietly repeating a stale
 cache forever.
 
+## Talking to it
+
+Every voice command, what it answers, and the safety notes worth reading before you
+point it at a smart plug: [`docs/voice-commands.md`](docs/voice-commands.md).
+
+Note the wake word is still "Hey Jarvis" even though the assistant answers as Pace.
+The name changed; the wake-word model was never retrained.
+
 ## Configuration
 
 `config.toml` in the repo root, all keys optional:
@@ -150,6 +158,19 @@ cache forever.
     max_attempts = 5      # omit for infinite repeats (default)
     poll_seconds = 300
     calendar_id = "primary"
+
+Everything else is environment, set in the systemd unit (see
+`deploy/jarvis.service.in`, which documents each one inline). All optional, and each
+missing value disables its feature rather than breaking startup:
+
+| Variable | Effect when unset |
+|---|---|
+| `PIPER_BIN`, `PIPER_MODEL` | No speech at all: logs `piper not found, using NullVoice` |
+| `GEMINI_API_KEY` | Conversation off; unrecognised speech gets "Sorry, I didn't catch that." |
+| `TUYA_*` | Plug control off: "The plug isn't set up." |
+| `NAS_DRIVES` | Drive monitoring off: "Storage isn't set up." |
+| `SPEAKER_MAC` | No Bluetooth reconnect watchdog |
+| `SPEECH_LATENCY_MS` | Defaults to 200ms of speaker lag for the dashboard orb |
 
 ## Tests
 
