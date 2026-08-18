@@ -11,3 +11,7 @@ config.toml
 ui/node_modules/
 ui/dist/
 .gemini_env
+
+# Personal profile source, never belongs in a public repo
+about-yusen*
+AboutYusen*
